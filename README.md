@@ -51,8 +51,10 @@ Global: `⌘K` command palette (navigate or delegate in one line), light/dark th
 - `lib/schedule.ts` — routine schedules, next/previous occurrence in the user's timezone (DST-safe)
 - `lib/server/runner.ts` — one persisted teammate run, shared by chat, Run now and the scheduler
 - `lib/server/scheduler.ts` — finds due routines, claims each occurrence once, runs them; `instrumentation.ts` + `api/cron/tick` drive it
+- `lib/server/notify.ts` + `lib/server/mailer.ts` — email alert outbox (dedupe, grouping, retries) and Resend delivery
+- `scripts/supabase-cron.mts` — installs the Supabase `pg_cron` job (secret in Vault)
 - `lib/server/google.ts` + `lib/server/seal.ts` — Google sign-in and Gmail/Calendar connection, AES-256-GCM sealing
-- API: `auth/{signup,login,logout}` · `auth/google/{start,callback}` · `me` · `workspace` · `run` · `approvals/[id]` · `connections/google` · `status` · `cron/tick`
+- API: `auth/{signup,login,logout}` · `auth/google/{start,callback}` · `me` · `workspace` · `run` · `approvals/[id]` · `connections/google` · `status` · `cron/tick` · `notifications/test`
 
 ## Accounts and data
 
@@ -73,9 +75,28 @@ Routines run on their own at the scheduled time, in the account's timezone.
 - **No fake work:** unattended runs never fall back to demo data. If no AI account has an API key, the run fails and says so. Runs interrupted by a crash are marked failed after 15 minutes.
 
 **Running it:**
-- **`next start`, Docker or a VM:** the in-process loop starts automatically and checks every minute. Set `SCHEDULER=off` to disable it.
-- **Vercel / serverless:** add a cron that calls `GET /api/cron/tick` with `Authorization: Bearer $CRON_SECRET`, e.g. in `vercel.json`: `{"crons":[{"path":"/api/cron/tick","schedule":"*/5 * * * *"}]}`. Vercel sends the header automatically when `CRON_SECRET` is set. Hobby plans only allow daily crons, so use Pro, or an external cron such as GitHub Actions or cron-job.org.
-- A tick has a time budget. Routines it can't start in time stay unclaimed and are picked up by the next tick.
+- **`next start`, Docker or a VM:** the in-process loop starts automatically and checks every minute.
+- **Serverless (Vercel and similar), with Supabase cron:** Supabase's `pg_cron` calls `GET /api/cron/tick` every minute through `pg_net`. The endpoint answers `202` straight away and runs the pass after responding, because `pg_net` gives up on requests after about 2 seconds.
+  1. On the app, set `CRON_SECRET` (`openssl rand -hex 32`) and `APP_URL`. Set `SCHEDULER=off` if the app also runs as a long-lived server.
+  2. Run `DATABASE_URL=<supabase connection string> APP_URL=https://your.app CRON_SECRET=<same value> npm run cron:supabase`. It enables `pg_cron` and `pg_net`, stores the secret in **Supabase Vault** (the job reads it from there, so it never appears in `cron.job` or logs), and schedules `agentic-scheduler-tick`. Re-running it updates the job; `-- --dry-run` shows the SQL, `-- --remove` unschedules it, `-- --every "*/2 * * * *"` changes the frequency.
+  3. Check it with `select status_code, created from net._http_response order by created desc limit 5;` and expect `202`. `supabase/cron.sql` has the same setup to paste into the SQL editor.
+- Extra or overlapping ticks are harmless, because each occurrence is claimed once. A pass has a time budget; routines it couldn't start stay unclaimed and are picked up by the next tick.
+
+## Email alerts
+
+When nobody's watching, scheduled work reaches you by email:
+- **Needs your approval:** a scheduled run drafted something, like a reply or a Slack post. The email shows what it wants to send and links to Approvals.
+- **Failed:** a routine couldn't run, with the reason (e.g. no API key, Google disconnected).
+
+How it works:
+- Alerts go into a `notifications` outbox with a unique key per approval or failed run, so nothing is emailed twice.
+- Each check sends **one email per person** with everything that's waiting.
+- Rows are claimed before sending, so concurrent workers never double-send. Resend gets an `Idempotency-Key`, so a retried request can't send twice either.
+- 429 and 5xx errors are retried (up to 5 attempts). Permanent errors, such as an unverified domain, aren't.
+- Content is HTML-escaped and links use `APP_URL`.
+- Things you start yourself (chat, Run now) don't email you; you're already there.
+
+Setup: create a [Resend](https://resend.com) API key, verify your sending domain, then set `RESEND_API_KEY`, `EMAIL_FROM` and `APP_URL`. People turn each alert type on or off and send a test email from **Settings**, which is also where the timezone routines run on is set. Without email configured, the app says so and alerts are dropped rather than sent late.
 
 ## Execution
 
@@ -104,11 +125,11 @@ What teammates can do with it: search mail (Gmail query syntax), read a day's ca
 
 Before a public launch: `gmail.readonly` and `gmail.send` are restricted scopes, so Google requires app verification and a third-party security assessment. Until then, only test users can connect.
 
-`npm test` runs the schedule unit tests plus 22 end-to-end checks against the real route handlers: accounts, sessions, rate limits, cross-site blocking, workspace versioning, persisted runs, approval tampering and double-execution, cross-account isolation, demo lockdown, the Google sign-in, connect, refresh and send paths, and the scheduler (exactly-once under concurrency, timezone, catch-up window, paused teammates, no fabricated runs, cron auth, Run now).
+`npm test` runs the schedule unit tests plus 25 end-to-end checks against the real route handlers: accounts, sessions, rate limits, cross-site blocking, workspace versioning, persisted runs, approval tampering and double-execution, cross-account isolation, demo lockdown, the Google sign-in, connect, refresh and send paths, and the scheduler (exactly-once under concurrency, timezone, catch-up window, paused teammates, no fabricated runs, cron auth, Run now), and email alerts (grouping, dedupe, escaping, retries, preferences).
 
 **Before production:**
 - AI provider keys and the Slack, GitHub and Linear tokens are still **server-wide**, so every account uses them. Give each workspace its own keys before inviting other people.
 - The login rate limiter is in-memory, so it's per instance. Use Redis or Upstash when running more than one.
 - There's no email verification or password reset yet.
 - The scheduler scans every workspace on each tick. That's fine for thousands of workspaces; beyond that, store the next run time and index it.
-- Nothing notifies you when a scheduled run needs approval or fails, apart from the in-app badge. Email or Slack notifications are next.
+- Alerts are email only; Slack DMs would be a natural addition.

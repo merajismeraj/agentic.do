@@ -97,6 +97,21 @@ create table if not exists routine_runs (
 );
 create index if not exists routine_runs_ws on routine_runs(workspace_id, started_at desc);
 
+create table if not exists notifications (
+  id text primary key,
+  user_id text not null references users(id) on delete cascade,
+  workspace_id text not null references workspaces(id) on delete cascade,
+  kind text not null,                  -- 'approval' | 'failure' | 'test'
+  dedupe_key text not null unique,     -- one alert per approval / failed run, ever
+  payload jsonb not null,
+  created_at timestamptz not null default now(),
+  claimed_at timestamptz,
+  sent_at timestamptz,
+  attempts integer not null default 0,
+  last_error text
+);
+create index if not exists notifications_pending on notifications(user_id) where sent_at is null;
+
 create table if not exists connections (
   workspace_id text not null references workspaces(id) on delete cascade,
   provider text not null,

@@ -14,7 +14,7 @@ import { uid } from "./utils";
  */
 
 const DEMO_KEY = "agentic.do:demo";
-const DOC_KEYS = ["user", "brains", "routing", "connected", "agents", "routines", "memory"] as const;
+const DOC_KEYS = ["user", "brains", "routing", "connected", "agents", "routines", "memory", "notifications"] as const;
 
 export type Mode = "loading" | "anon" | "demo" | "account";
 export type SyncState = "saved" | "saving" | "offline";

@@ -5,11 +5,12 @@ import { db, type Db } from "./db";
 import { seal, unseal } from "./seal";
 
 /** The part of a workspace the UI edits directly; everything else is server-written. */
-export type WorkspaceDoc = Pick<State, "user" | "brains" | "routing" | "connected" | "agents" | "routines" | "memory">;
-export const DOC_KEYS = ["user", "brains", "routing", "connected", "agents", "routines", "memory"] as const;
+export type WorkspaceDoc = Pick<State, "user" | "brains" | "routing" | "connected" | "agents" | "routines" | "memory" | "notifications">;
+export const DOC_KEYS = ["user", "brains", "routing", "connected", "agents", "routines", "memory", "notifications"] as const;
 
 export interface Workspace {
   id: string;
+  ownerId: string;
   doc: WorkspaceDoc;
   version: number;
 }
@@ -23,14 +24,17 @@ export function validateDoc(input: unknown): WorkspaceDoc {
   for (const k of arrays) if (!Array.isArray(d[k])) throw new HttpError(400, `Invalid workspace: ${k}`);
   if (!d.user || typeof d.user !== "object") throw new HttpError(400, "Invalid workspace: user");
   if (!["auto", "cost", "quality"].includes(d.routing as string)) throw new HttpError(400, "Invalid workspace: routing");
-  const doc = Object.fromEntries(DOC_KEYS.map((k) => [k, d[k]])) as unknown as WorkspaceDoc;
+  const n = d.notifications as Record<string, unknown> | undefined;
+  if (n !== undefined && (typeof n !== "object" || n === null || typeof n.approvals !== "boolean" || typeof n.failures !== "boolean"))
+    throw new HttpError(400, "Invalid workspace: notifications");
+  const doc = Object.fromEntries(DOC_KEYS.filter((k) => d[k] !== undefined).map((k) => [k, d[k]])) as unknown as WorkspaceDoc;
   if (JSON.stringify(doc).length > MAX_DOC_BYTES) throw new HttpError(413, "Workspace is too large");
   return doc;
 }
 
 export async function getWorkspace(userId: string, conn?: Db): Promise<Workspace | null> {
-  const { rows } = await (conn ?? (await db())).query<{ id: string; doc: WorkspaceDoc; version: number }>(
-    "select id, doc, version from workspaces where owner_id = $1",
+  const { rows } = await (conn ?? (await db())).query<Workspace>(
+    `select id, owner_id as "ownerId", doc, version from workspaces where owner_id = $1`,
     [userId],
   );
   return rows[0] ?? null;
@@ -317,7 +321,10 @@ export async function listRoutineRuns(workspaceId: string, limit = 100): Promise
 export async function* allWorkspaces(batch = 200): AsyncGenerator<Workspace> {
   let after = "";
   for (;;) {
-    const { rows } = await (await db()).query<Workspace>("select id, doc, version from workspaces where id > $1 order by id limit $2", [after, batch]);
+    const { rows } = await (await db()).query<Workspace>(
+      `select id, owner_id as "ownerId", doc, version from workspaces where id > $1 order by id limit $2`,
+      [after, batch],
+    );
     if (!rows.length) return;
     for (const r of rows) yield r;
     after = rows[rows.length - 1].id;

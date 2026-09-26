@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test": "tsx tests/schedule.test.mts && tsx --conditions=react-server tests/api.test.mts"
+    "test": "tsx tests/schedule.test.mts && tsx --conditions=react-server tests/api.test.mts",
+    "cron:supabase": "tsx scripts/supabase-cron.mts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.128.0",

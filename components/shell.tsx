@@ -8,6 +8,7 @@ import {
   Home,
   Inbox,
   LogOut,
+  Settings,
   LibraryBig,
   Menu,
   Moon,
@@ -39,6 +40,7 @@ const SETUP = [
   { href: "/app/brains", label: "AI accounts", icon: BrainCircuit },
   { href: "/app/integrations", label: "Integrations", icon: Blocks },
   { href: "/app/memory", label: "Context", icon: LibraryBig },
+  { href: "/app/settings", label: "Settings", icon: Settings },
 ];
 
 export function Shell({ children }: { children: ReactNode }) {
@@ -282,6 +284,9 @@ function AccountMenu({
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
           <div className="animate-pop absolute right-0 bottom-full left-0 z-50 mb-1 rounded-xl border border-line bg-surface p-1 shadow-pop">
             <div className="truncate px-2.5 py-2 text-xs text-muted">{detail}</div>
+            <Link href="/app/settings" onClick={() => setOpen(false)} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm hover:bg-surface-2">
+              <Settings size={14} className="text-muted" /> Settings
+            </Link>
             <button onClick={onSignOut} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm hover:bg-surface-2">
               <LogOut size={14} className="text-muted" /> {signOutLabel}
             </button>

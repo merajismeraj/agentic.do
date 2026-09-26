@@ -175,6 +175,13 @@ export interface State {
   activity: Activity[];
   memory: MemoryFact[];
   routineRuns?: RoutineRun[];
+  /** Email alerts for unattended work. Missing means on. */
+  notifications?: NotificationPrefs;
+}
+
+export interface NotificationPrefs {
+  approvals: boolean;
+  failures: boolean;
 }
 
 export interface RunRequest {
@@ -200,4 +207,5 @@ export interface LiveStatus {
   providers: Record<ProviderId, { live: boolean; model: string }>;
   tools: Record<string, boolean>;
   google: { configured: boolean; email?: string };
+  email: { configured: boolean };
 }

@@ -1,5 +1,6 @@
 import "server-only";
 import { previousOccurrence, scheduleOf } from "../schedule";
+import { enqueueNotification, flushNotifications, prefsOf, type FlushResult } from "./notify";
 import { routinePrompt, runTeammate } from "./runner";
 import { allWorkspaces, claimRoutineRun, failStaleRuns, finishRoutineRun } from "./workspace";
 
@@ -12,6 +13,7 @@ export interface TickResult {
   done: number;
   failed: number;
   skippedBusy: number;
+  alerts?: FlushResult;
 }
 
 /**
@@ -58,9 +60,36 @@ export async function tick(opts: { now?: number; budgetMs?: number; concurrency?
           await finishRoutineRun(ws.id, runId, { status: r.error ? "failed" : "done", messageId: r.replyId, error: r.error, needsApproval: r.approvals.length > 0 });
           if (r.error) result.failed++;
           else result.done++;
+          // Nobody is watching a scheduled run, so tell them by email when it needs them.
+          const prefs = prefsOf(ws.doc.notifications);
+          if (prefs.approvals)
+            for (const a of r.approvals)
+              await enqueueNotification({
+                userId: ws.ownerId,
+                workspaceId: ws.id,
+                kind: "approval",
+                dedupeKey: `approval:${a.id}`,
+                payload: { agentName: agent.name, routineTitle: routine.title, title: a.title, summary: a.summary, preview: a.preview },
+              });
+          if (r.error && prefs.failures)
+            await enqueueNotification({
+              userId: ws.ownerId,
+              workspaceId: ws.id,
+              kind: "failure",
+              dedupeKey: `failure:${runId}`,
+              payload: { agentName: agent.name, routineTitle: routine.title, error: r.error },
+            });
         } catch (e) {
           result.failed++;
           await finishRoutineRun(ws.id, runId, { status: "failed", error: (e as Error).message });
+          if (prefsOf(ws.doc.notifications).failures)
+            await enqueueNotification({
+              userId: ws.ownerId,
+              workspaceId: ws.id,
+              kind: "failure",
+              dedupeKey: `failure:${runId}`,
+              payload: { agentName: agent.name, routineTitle: routine.title, error: (e as Error).message },
+            });
         }
       });
     }
@@ -73,5 +102,7 @@ export async function tick(opts: { now?: number; budgetMs?: number; concurrency?
       while (next < jobs.length) await jobs[next++]();
     }),
   );
+  // One email per person for everything this pass (and anything left over from earlier failures).
+  result.alerts = await flushNotifications();
   return result;
 }

@@ -1,5 +1,6 @@
 import { currentUser } from "@/lib/server/auth";
 import { googleAuthFor, googleConfigured } from "@/lib/server/google";
+import { emailConfigured } from "@/lib/server/mailer";
 import { providerStatus } from "@/lib/server/providers";
 import { toolStatus } from "@/lib/server/tools";
 import { getWorkspace } from "@/lib/server/workspace";
@@ -17,6 +18,6 @@ export async function GET(req: Request) {
   if (!user) for (const p of Object.values(providers)) p.live = false;
   const tools = toolStatus({ google, timeZone: "UTC" });
   if (!user) for (const k of Object.keys(tools)) tools[k] = false;
-  const body: LiveStatus = { providers, tools, google: { configured: googleConfigured(), email: google?.email } };
+  const body: LiveStatus = { providers, tools, google: { configured: googleConfigured(), email: google?.email }, email: { configured: emailConfigured() } };
   return Response.json(body);
 }

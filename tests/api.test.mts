@@ -18,7 +18,8 @@ const route = (p: string) => import(R + p);
 
 /* ---------------------------- fetch mocks ---------------------------- */
 
-const calls: { url: string; body?: string }[] = [];
+const calls: { url: string; body?: string; headers?: Record<string, string> }[] = [];
+let resendFailNext = 0;
 const idToken = (claims: object) => `h.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.s`;
 let nextIdentity: object = { sub: "g-1", email: "gina@acme.com", name: "Gina", email_verified: true };
 const tokenScope =
@@ -29,7 +30,7 @@ let chatScript: ((body: Any) => Any) | null = null;
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
   const body = init?.body != null ? String(init.body) : input instanceof Request ? await input.clone().text() : undefined;
-  calls.push({ url, body });
+  calls.push({ url, body, headers: (init?.headers as Record<string, string>) ?? {} });
   const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { "content-type": "application/json" } });
   if (url === "https://oauth2.googleapis.com/token") {
     const p = new URLSearchParams(body);
@@ -58,6 +59,13 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const b = JSON.parse(body!);
     const msg = chatScript!(b);
     return json({ id: "x", object: "chat.completion", created: 0, model: b.model, choices: [{ index: 0, message: msg, finish_reason: msg.tool_calls ? "tool_calls" : "stop" }] });
+  }
+  if (url === "https://api.resend.com/emails") {
+    if (resendFailNext > 0) {
+      resendFailNext--;
+      return json({ name: "internal_server_error", message: "try again" }, 500);
+    }
+    return json({ id: "email_" + calls.length });
   }
   throw new Error("unmocked fetch: " + url);
 }) as typeof fetch;
@@ -477,9 +485,9 @@ assert.equal((await cron.GET(new Request("http://app.test/api/cron/tick"))).stat
 process.env.CRON_SECRET = "s3cret-value";
 assert.equal((await cron.GET(new Request("http://app.test/api/cron/tick", { headers: { authorization: "Bearer nope" } }))).status, 401);
 res = await cron.GET(new Request("http://app.test/api/cron/tick", { headers: { authorization: "Bearer s3cret-value" } }));
-assert.equal(res.status, 200);
-assert.ok("started" in (await res.json()));
-ok("cron endpoint requires CRON_SECRET");
+assert.equal(res.status, 202, "responds immediately (pg_net times out after 2s) and runs the pass after");
+assert.deepEqual(await res.json(), { accepted: true });
+ok("cron endpoint requires CRON_SECRET and answers fast");
 
 const evRun = await readStream(await run.POST(alex.req("/api/run", { method: "POST", body: { routineId: "r-trig", messageId: "runNowMsg1", replyId: "runNowRep1" } })));
 assert.equal(evRun.at(-1).t, "done");
@@ -491,6 +499,85 @@ assert.equal(cur.messages.find((m: Any) => m.id === "runNowMsg1").text, "Run “
 assert.equal(cur.messages.find((m: Any) => m.id === "runNowRep1").trigger.scheduled, false);
 assert.equal((await run.POST(alex.req("/api/run", { method: "POST", body: { routineId: "missing" } }))).status, 404);
 ok("Run now runs any routine on demand (including trigger routines) and records it");
+
+/* ---------------------------- email alerts --------------------------- */
+
+const notifyTest = await route("app/api/notifications/test/route.ts");
+const emails = () => calls.filter((c) => c.url === "https://api.resend.com/emails");
+delete process.env.RESEND_API_KEY;
+delete process.env.EMAIL_FROM;
+res = await notifyTest.POST(alex.req("/api/notifications/test", { method: "POST" }));
+assert.equal(res.status, 503, "no email config → clear error");
+assert.equal((await statusOf(alex)).email.configured, false);
+process.env.RESEND_API_KEY = "re_test";
+process.env.EMAIL_FROM = "agentic.do <alerts@agentic.test>";
+process.env.APP_URL = "https://app.agentic.test/";
+assert.equal((await statusOf(alex)).email.configured, true);
+res = await notifyTest.POST(alex.req("/api/notifications/test", { method: "POST" }));
+assert.equal(res.status, 200);
+let mail = JSON.parse(emails().at(-1)!.body!);
+assert.deepEqual(mail.to, ["alex@northstar.com"]);
+assert.equal(mail.subject, "Test alert from agentic.do");
+assert.equal(mail.from, "agentic.do <alerts@agentic.test>");
+ok("test email: clear error when email isn't configured, delivered via Resend when it is");
+
+// Scheduled runs that need approval → one grouped email; chat runs never email.
+chatScript = (b) =>
+  b.messages.some((m: Any) => m.role === "tool")
+    ? { role: "assistant", content: "Drafted it — waiting for your OK." }
+    : {
+        role: "assistant",
+        content: null,
+        tool_calls: [{ id: "e1", type: "function", function: { name: "gmail_send", arguments: JSON.stringify({ to: "dana@lumen.io", subject: "Q4 <script>alert(1)</script>", body: "Hi Dana & team" }) } }],
+      };
+const sentBefore = emails().length;
+await readStream(await run.POST(alex.req("/api/run", { method: "POST", body: { agentId: "rex", text: "email Dana" } })));
+assert.equal(emails().length, sentBefore, "chat runs don't email — you're already looking");
+const THU = Date.parse("2026-10-01T02:40:00Z");
+const thu = await scheduler.tick({ now: THU });
+assert.equal(thu.started, 2);
+assert.deepEqual(thu.alerts, { emails: 1, sent: 2, failed: 0 });
+const alertCall = emails().at(-1)!;
+mail = JSON.parse(alertCall.body!);
+assert.equal(mail.subject, "2 things need you in agentic.do");
+assert.ok(mail.html.includes("Q4 &lt;script&gt;alert(1)&lt;/script&gt;") && !mail.html.includes("<script>"), "content is HTML-escaped");
+assert.ok(mail.html.includes("https://app.agentic.test/app/inbox"), "links use APP_URL");
+assert.ok(mail.text.includes("Review 2 approvals: https://app.agentic.test/app/inbox"));
+assert.ok(mail.text.includes("Hi Dana & team"));
+assert.match(alertCall.headers!["Idempotency-Key"], /^alerts-[0-9a-f]{40}$/);
+assert.equal((await scheduler.tick({ now: THU + 60_000 })).alerts.emails, 0, "nothing is emailed twice");
+ok("scheduled approvals are emailed once, grouped into one escaped email with working links");
+
+// Failures: retried on 5xx, then delivered; preferences are respected.
+cur = await meOf(alex);
+await workspace.PUT(alex.req("/api/workspace", {
+  method: "PUT",
+  body: { doc: { ...cur.workspace.doc, notifications: { approvals: false, failures: true } }, baseVersion: cur.workspace.version },
+}));
+delete process.env.OPENAI_API_KEY;
+resendFailNext = 1;
+const FRI = Date.parse("2026-10-02T02:40:00Z");
+const fri = await scheduler.tick({ now: FRI });
+assert.equal(fri.failed, 2);
+assert.deepEqual(fri.alerts, { emails: 1, sent: 0, failed: 2 }, "Resend 500 → kept for retry");
+const { flushNotifications } = await route("lib/server/notify.ts");
+assert.deepEqual(await flushNotifications(), { emails: 1, sent: 2, failed: 0 }, "retry delivers");
+mail = JSON.parse(emails().at(-1)!.body!);
+assert.equal(mail.subject, "2 things need you in agentic.do");
+assert.ok(mail.text.includes("Rex couldn't run “Morning brief”") && mail.text.includes("API key"));
+assert.ok(mail.html.includes("https://app.agentic.test/app/schedule"), "failure-only email links to routines");
+process.env.OPENAI_API_KEY = "test-key";
+chatScript = (b) =>
+  b.messages.some((m: Any) => m.role === "tool")
+    ? { role: "assistant", content: "Waiting for your OK." }
+    : { role: "assistant", content: null, tool_calls: [{ id: "e2", type: "function", function: { name: "gmail_send", arguments: JSON.stringify({ to: "x@y.z", subject: "s", body: "b" }) } }] };
+const MON2 = Date.parse("2026-10-05T02:40:00Z");
+const mon2 = await scheduler.tick({ now: MON2 });
+assert.equal(mon2.started, 2);
+assert.equal(mon2.alerts.emails, 0, "approval alerts switched off → no email");
+res = await workspace.PUT(alex.req("/api/workspace", { method: "PUT", body: { doc: { ...doc(), notifications: { approvals: "yes" } }, baseVersion: (await meOf(alex)).workspace.version } }));
+assert.equal(res.status, 400);
+ok("failure alerts retry through provider errors; alert preferences are respected and validated");
 
 console.log("\nALL API TESTS PASSED");
 process.exit(0);
