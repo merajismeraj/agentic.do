@@ -1,20 +1,41 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { EMPTY } from "./seed";
-import type { Agent, Approval, LiveStatus, Message, RunEvent, RunRequest, State } from "./types";
+import { demoState, EMPTY } from "./seed";
+import type { Activity, Agent, Approval, LiveStatus, Message, RunEvent, RunRequest, State } from "./types";
 import { uid } from "./utils";
 
-const KEY = "agentic.do:v1";
+/**
+ * Client store. Three modes:
+ * - "account": signed in; the workspace lives on the server. Edits sync with
+ *   optimistic versioning, runs and approvals go through the API.
+ * - "demo": no account; a sample workspace kept in this browser, always simulated.
+ * - "anon": signed out with no demo.
+ */
 
+const DEMO_KEY = "agentic.do:demo";
+const DOC_KEYS = ["user", "brains", "routing", "connected", "agents", "routines", "memory"] as const;
+
+export type Mode = "loading" | "anon" | "demo" | "account";
+export type SyncState = "saved" | "saving" | "offline";
 type Updater = (s: State) => State;
+interface Account {
+  id: string;
+  email: string;
+  name: string;
+}
 
 interface Store {
   state: State;
   ready: boolean;
+  mode: Mode;
+  account: Account | null;
+  sync: SyncState;
   update: (fn: Updater) => void;
-  replace: (s: State) => void;
-  reset: () => void;
+  startDemo: () => void;
+  finishOnboarding: (s: State) => Promise<boolean>;
+  reload: () => Promise<Mode>;
+  signOut: () => Promise<void>;
   send: (agentId: string, text: string) => void;
   decide: (approvalId: string, decision: "approved" | "rejected", edited?: Approval["preview"]) => void;
   toast: (text: string) => void;
@@ -25,20 +46,33 @@ interface Store {
 
 const Ctx = createContext<Store | null>(null);
 
+/** The server-owned document: never persist transient run state. */
+function docOf(s: State) {
+  const doc = Object.fromEntries(DOC_KEYS.map((k) => [k, s[k]])) as Pick<State, (typeof DOC_KEYS)[number]>;
+  return { ...doc, agents: doc.agents.map((a) => (a.status === "working" ? { ...a, status: "idle" as const } : a)) };
+}
+
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<State>(EMPTY);
-  const [ready, setReady] = useState(false);
+  const [mode, setMode] = useState<Mode>("loading");
+  const [account, setAccount] = useState<Account | null>(null);
+  const [sync, setSync] = useState<SyncState>("saved");
   const [toasts, setToasts] = useState<{ id: string; text: string }[]>([]);
   const [live, setLive] = useState<LiveStatus | null>(null);
+
   const stateRef = useRef(state);
   stateRef.current = state;
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
+  const version = useRef<number | null>(null);
+  const syncTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const syncing = useRef(false);
+  const dirty = useRef(false);
 
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(KEY);
-      if (raw) setState({ ...EMPTY, ...JSON.parse(raw) });
-    } catch {}
-    setReady(true);
+  const toast = useCallback((text: string) => {
+    const id = uid();
+    setToasts((t) => [...t, { id, text }]);
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 3200);
   }, []);
 
   const refreshLive = useCallback(async () => {
@@ -53,42 +87,185 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  useEffect(() => {
+  /* ------------------------------ Loading --------------------------- */
+
+  const reload = useCallback(async (): Promise<Mode> => {
+    try {
+      const r = await fetch("/api/me", { cache: "no-store" });
+      if (r.ok) {
+        const me = (await r.json()) as {
+          user: Account;
+          workspace: { doc: Partial<State>; version: number } | null;
+          messages?: Message[];
+          approvals?: Approval[];
+          activity?: Activity[];
+        };
+        setAccount(me.user);
+        version.current = me.workspace?.version ?? null;
+        setState(
+          me.workspace
+            ? { ...EMPTY, ...me.workspace.doc, onboarded: true, messages: me.messages ?? [], approvals: me.approvals ?? [], activity: me.activity ?? [] }
+            : { ...EMPTY, user: { ...EMPTY.user, name: me.user.name } },
+        );
+        setMode("account");
+        refreshLive();
+        return "account";
+      }
+    } catch {}
+    setAccount(null);
+    version.current = null;
+    let demo: State | null = null;
+    try {
+      const raw = localStorage.getItem(DEMO_KEY);
+      if (raw) demo = { ...EMPTY, ...JSON.parse(raw) };
+    } catch {}
+    setState(demo ?? EMPTY);
+    const next: Mode = demo?.onboarded ? "demo" : "anon";
+    setMode(next);
     refreshLive();
+    return next;
   }, [refreshLive]);
 
   useEffect(() => {
-    if (!ready) return;
+    reload();
+  }, [reload]);
+
+  /* ------------------------------ Persistence ----------------------- */
+
+  const pushDoc = useCallback(async () => {
+    if (syncing.current) {
+      dirty.current = true;
+      return;
+    }
+    syncing.current = true;
+    dirty.current = false;
+    setSync("saving");
     try {
-      localStorage.setItem(KEY, JSON.stringify(state));
-    } catch {}
-  }, [state, ready]);
+      const res = await fetch("/api/workspace", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ doc: docOf(stateRef.current), baseVersion: version.current }),
+      });
+      if (res.status === 409) {
+        // Someone else (another tab) saved first: take theirs so nothing diverges silently.
+        const cur = (await res.json()) as { doc: Partial<State>; version: number };
+        version.current = cur.version;
+        setState((s) => ({ ...s, ...cur.doc }));
+        toast("This workspace changed in another tab — showing the latest version");
+      } else if (res.ok) {
+        version.current = ((await res.json()) as { version: number }).version;
+      } else if (res.status === 401) {
+        toast("Your session ended — sign in again");
+        setMode("anon");
+      } else throw new Error(String(res.status));
+      setSync("saved");
+    } catch {
+      setSync("offline");
+      dirty.current = true;
+    } finally {
+      syncing.current = false;
+      if (dirty.current) syncTimer.current = setTimeout(pushDoc, 2000);
+      else syncTimer.current = null;
+    }
+  }, [toast]);
 
-  const update = useCallback((fn: Updater) => setState((s) => fn(s)), []);
+  const scheduleSync = useCallback(() => {
+    if (syncTimer.current) clearTimeout(syncTimer.current);
+    setSync("saving");
+    syncTimer.current = setTimeout(pushDoc, 500);
+  }, [pushDoc]);
 
-  const toast = useCallback((text: string) => {
-    const id = uid();
-    setToasts((t) => [...t, { id, text }]);
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 3200);
+  // Flush a pending save when the tab closes.
+  useEffect(() => {
+    const flush = () => {
+      if (modeRef.current !== "account" || !syncTimer.current) return;
+      fetch("/api/workspace", {
+        method: "PUT",
+        keepalive: true,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ doc: docOf(stateRef.current), baseVersion: version.current }),
+      });
+    };
+    window.addEventListener("pagehide", flush);
+    return () => window.removeEventListener("pagehide", flush);
   }, []);
+
+  useEffect(() => {
+    if (mode !== "demo") return;
+    try {
+      localStorage.setItem(DEMO_KEY, JSON.stringify(state));
+    } catch {}
+  }, [state, mode]);
+
+  const update = useCallback(
+    (fn: Updater) => {
+      setState((s) => fn(s));
+      if (modeRef.current === "account") scheduleSync();
+    },
+    [scheduleSync],
+  );
+
+  const startDemo = useCallback(() => {
+    const d = demoState();
+    setState(d);
+    setMode("demo");
+    try {
+      localStorage.setItem(DEMO_KEY, JSON.stringify(d));
+    } catch {}
+  }, []);
+
+  const finishOnboarding = useCallback(
+    async (next: State) => {
+      const res = await fetch("/api/workspace", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ doc: docOf(next), baseVersion: null, init: { messages: next.messages } }),
+      });
+      if (!res.ok) {
+        toast(res.status === 409 ? "You already have a workspace" : "Couldn't save your workspace — try again");
+        if (res.status === 409) await reload();
+        return false;
+      }
+      version.current = ((await res.json()) as { version: number }).version;
+      setState(next);
+      try {
+        localStorage.removeItem(DEMO_KEY);
+      } catch {}
+      return true;
+    },
+    [toast, reload],
+  );
+
+  const signOut = useCallback(async () => {
+    await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+    try {
+      localStorage.removeItem(DEMO_KEY);
+    } catch {}
+    setAccount(null);
+    version.current = null;
+    setState(EMPTY);
+    setMode("anon");
+    refreshLive();
+  }, [refreshLive]);
+
+  /* ------------------------------ Runs ------------------------------ */
 
   const send = useCallback(
     (agentId: string, text: string) => {
       const s = stateRef.current;
       const agent = s.agents.find((a) => a.id === agentId);
       if (!agent) return;
+      const userId = uid();
       const replyId = uid();
       const now = Date.now();
-      const history = s.messages
-        .filter((m) => m.threadId === agentId && m.text)
-        .map((m) => ({ role: m.author === "user" ? ("user" as const) : ("assistant" as const), text: m.text }));
 
+      // Transient UI state only (not synced): the run itself is persisted server-side.
       setState((st) => ({
         ...st,
         agents: st.agents.map((a) => (a.id === agentId ? { ...a, status: "working" } : a)),
         messages: [
           ...st.messages,
-          { id: uid(), threadId: agentId, author: "user", text, at: now },
+          { id: userId, threadId: agentId, author: "user", text, at: now },
           { id: replyId, threadId: agentId, author: "agent", agentId, text: "", at: now + 1, steps: [] },
         ],
       }));
@@ -98,6 +275,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
       const approvals: Approval[] = [];
       let finalText = "";
+      let failed = false;
 
       const onEvent = (e: RunEvent) => {
         if (e.t === "step") {
@@ -118,26 +296,39 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         } else if (e.t === "done") {
           patchReply((m) => ({ ...m, mode: e.mode, steps: m.steps?.map((x) => ({ ...x, state: "done" })) }));
         } else if (e.t === "error") {
+          failed = true;
           patchReply((m) => ({ ...m, error: e.message, steps: m.steps?.map((x) => ({ ...x, state: "done" })) }));
         }
       };
 
-      const body: RunRequest = {
-        agent,
-        text,
-        threadId: agentId,
-        history,
-        brains: s.brains,
-        routing: s.routing,
-        connected: s.connected,
-        memory: s.memory,
-        user: s.user,
-      };
+      const demo: RunRequest | undefined =
+        modeRef.current === "demo"
+          ? {
+              agent,
+              text,
+              threadId: agentId,
+              history: s.messages
+                .filter((m) => m.threadId === agentId && m.text)
+                .map((m) => ({ role: m.author === "user" ? ("user" as const) : ("assistant" as const), text: m.text })),
+              brains: s.brains,
+              routing: s.routing,
+              connected: s.connected,
+              memory: s.memory,
+              user: s.user,
+            }
+          : undefined;
 
       (async () => {
         try {
-          const res = await fetch("/api/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-          if (!res.ok || !res.body) throw new Error(`Run failed (${res.status})`);
+          const res = await fetch("/api/run", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(demo ? { demo } : { agentId, text, messageId: userId, replyId }),
+          });
+          if (!res.ok || !res.body) {
+            const err = (await res.json().catch(() => ({}))) as { error?: string };
+            throw new Error(err.error ?? `Run failed (${res.status})`);
+          }
           const reader = res.body.getReader();
           const decoder = new TextDecoder();
           let buf = "";
@@ -162,7 +353,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               {
                 id: uid(),
                 agentId,
-                text: approvals.length ? `Prepared “${approvals[0].title}” for approval` : `Completed: ${text.slice(0, 60)}`,
+                text: approvals.length ? `Prepared “${approvals[0].title}” for approval` : failed ? `Couldn't finish: ${text.slice(0, 50)}` : `Completed: ${text.slice(0, 60)}`,
                 toolId: approvals[0]?.toolId,
                 at: Date.now(),
               },
@@ -170,54 +361,56 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             ].slice(0, 50),
           }));
           if (approvals.length) toast(`${agent.name} needs your approval`);
-          else if (finalText) toast(`${agent.name} finished`);
+          else if (finalText && !failed) toast(`${agent.name} finished`);
         }
       })();
     },
     [toast],
   );
 
+  /* ------------------------------ Approvals ------------------------- */
+
   const decide = useCallback<Store["decide"]>(
     (id, decision, edited) => {
       const s = stateRef.current;
       const a = s.approvals.find((x) => x.id === id);
-      if (!a) return;
+      if (!a || a.status !== "pending") return;
       const agent = s.agents.find((x) => x.id === a.agentId) as Agent | undefined;
+      const patch = (p: Partial<Approval>) => setState((st) => ({ ...st, approvals: st.approvals.map((x) => (x.id === id ? { ...x, ...p } : x)) }));
       const log = (text: string) =>
         setState((st) => ({ ...st, activity: [{ id: uid(), agentId: a.agentId, toolId: a.toolId, text, at: Date.now() }, ...st.activity] }));
 
-      setState((st) => ({
-        ...st,
-        approvals: st.approvals.map((x) => (x.id === id ? { ...x, status: decision, preview: edited ?? x.preview } : x)),
-      }));
+      patch({ status: decision, preview: edited ?? a.preview });
 
-      if (decision === "rejected") {
-        log(`Discarded: ${a.title}`);
-        toast("Discarded");
+      if (modeRef.current !== "account") {
+        log(decision === "approved" ? `Done: ${a.title}` : `Discarded: ${a.title}`);
+        toast(decision === "approved" ? `✓ ${agent?.name ?? "Agent"} is on it (demo)` : "Discarded");
         return;
-      }
-      if (!a.call) {
-        log(`Done: ${a.title}`);
-        toast(`✓ ${agent?.name ?? "Agent"} is on it`);
-        return;
-      }
-
-      // Apply edits made on the card to the tool input, matching fields by label.
-      const input = { ...a.call.input };
-      for (const f of edited ?? []) {
-        const key = Object.keys(input).find((k) => k.toLowerCase() === f.label.toLowerCase() || (f.label === "Message" && k === "text") || (f.label === "Comment" && k === "body"));
-        if (key && typeof input[key] === "string") input[key] = f.value;
       }
 
       (async () => {
         try {
-          const res = await fetch("/api/approve", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tool: a.call!.tool, input, timeZone: s.user.timezone }) });
-          const r = (await res.json()) as { ok: boolean; live?: boolean; summary: string };
-          setState((st) => ({ ...st, approvals: st.approvals.map((x) => (x.id === id ? { ...x, result: r.summary } : x)) }));
-          log(r.ok ? r.summary : `Failed: ${r.summary}`);
-          toast(r.ok ? `✓ ${r.summary}` : `Couldn't complete: ${r.summary}`);
+          const res = await fetch(`/api/approvals/${encodeURIComponent(id)}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ decision, edits: edited }),
+          });
+          const r = (await res.json()) as { status?: Approval["status"]; ok?: boolean; result?: string; preview?: Approval["preview"]; error?: string };
+          if (res.status === 409 || res.status === 404) {
+            toast(r.error ?? "Already handled");
+            return;
+          }
+          if (decision === "rejected") {
+            log(`Discarded: ${a.title}`);
+            toast("Discarded");
+            return;
+          }
+          patch({ result: r.result ?? r.error, preview: r.preview ?? edited ?? a.preview });
+          log(r.result ?? `Done: ${a.title}`);
+          toast(r.ok ? `✓ ${r.result}` : `Couldn't complete: ${r.result ?? r.error}`);
         } catch (err) {
-          toast(`Couldn't complete: ${(err as Error).message}`);
+          patch({ status: "pending" });
+          toast(`Couldn't reach the server: ${(err as Error).message}`);
         }
       })();
     },
@@ -227,10 +420,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const value = useMemo<Store>(
     () => ({
       state,
-      ready,
+      ready: mode !== "loading",
+      mode,
+      account,
+      sync,
       update,
-      replace: setState,
-      reset: () => setState(EMPTY),
+      startDemo,
+      finishOnboarding,
+      reload,
+      signOut,
       send,
       decide,
       toast,
@@ -238,7 +436,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       live,
       refreshLive,
     }),
-    [state, ready, update, send, decide, toast, toasts, live, refreshLive],
+    [state, mode, account, sync, update, startDemo, finishOnboarding, reload, signOut, send, decide, toast, toasts, live, refreshLive],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

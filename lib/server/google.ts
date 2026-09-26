@@ -1,15 +1,16 @@
 import "server-only";
-import { seal, sealingConfigured, unseal } from "./seal";
+import { sealingConfigured } from "./seal";
+import { getConnection, setConnection, deleteConnection } from "./workspace";
 
 /**
- * Google OAuth + Gmail/Calendar client. Tokens live in an encrypted, httpOnly
- * cookie, so each browser acts with its own Google account.
+ * Google OAuth for two purposes: signing in (identity scopes only) and
+ * connecting Gmail + Calendar to a workspace (tokens stored sealed in the DB,
+ * so scheduled work can use them without a browser).
  */
 
-export const GOOGLE_COOKIE = "agentic_google";
 export const STATE_COOKIE = "agentic_oauth_state";
-const MAX_AGE = 60 * 60 * 24 * 180;
 
+const LOGIN_SCOPES = ["openid", "email", "profile"];
 export const GOOGLE_SCOPES = [
   "openid",
   "email",
@@ -18,8 +19,9 @@ export const GOOGLE_SCOPES = [
   "https://www.googleapis.com/auth/calendar.events",
 ];
 
-export interface GoogleSession {
-  email: string;
+export type OAuthPurpose = "login" | "connect";
+
+export interface GoogleTokens {
   refreshToken: string;
   accessToken: string;
   /** epoch ms */
@@ -38,24 +40,23 @@ export function googleConfigured() {
 }
 
 /** Only same-site relative paths are allowed as post-login destinations (no open redirects). */
-export function safeReturn(v: string | null | undefined) {
-  return v && /^\/(?!\/)[\w\-/]*$/.test(v) ? v : "/app/integrations";
+export function safeReturn(v: string | null | undefined, fallback = "/app/integrations") {
+  return v && /^\/(?!\/)[\w\-/]*$/.test(v) ? v : fallback;
 }
 
 export function redirectUri(origin: string) {
-  return env("GOOGLE_REDIRECT_URI") ?? `${origin}/api/oauth/google/callback`;
+  return env("GOOGLE_REDIRECT_URI") ?? `${origin}/api/auth/google/callback`;
 }
 
-export function authUrl(origin: string, state: string) {
+export function authUrl(origin: string, state: string, purpose: OAuthPurpose, loginHint?: string) {
   const p = new URLSearchParams({
     client_id: env("GOOGLE_CLIENT_ID")!,
     redirect_uri: redirectUri(origin),
     response_type: "code",
-    scope: GOOGLE_SCOPES.join(" "),
-    access_type: "offline",
-    prompt: "consent",
-    include_granted_scopes: "true",
+    scope: (purpose === "login" ? LOGIN_SCOPES : GOOGLE_SCOPES).join(" "),
     state,
+    ...(purpose === "connect" ? { access_type: "offline", prompt: "consent", include_granted_scopes: "true" } : { prompt: "select_account" }),
+    ...(loginHint ? { login_hint: loginHint } : {}),
   });
   return `https://accounts.google.com/o/oauth2/v2/auth?${p}`;
 }
@@ -65,6 +66,7 @@ interface TokenResponse {
   expires_in: number;
   refresh_token?: string;
   id_token?: string;
+  scope?: string;
   error?: string;
   error_description?: string;
 }
@@ -80,55 +82,47 @@ async function tokenRequest(params: Record<string, string>): Promise<TokenRespon
   return json;
 }
 
-export async function exchangeCode(code: string, origin: string): Promise<GoogleSession> {
+export interface GoogleIdentity {
+  sub: string;
+  email: string;
+  name: string;
+  emailVerified: boolean;
+}
+
+export async function exchangeCode(code: string, origin: string) {
   const t = await tokenRequest({ code, grant_type: "authorization_code", redirect_uri: redirectUri(origin) });
-  if (!t.refresh_token) throw new Error("Google didn't return a refresh token; remove the app's access in your Google account and try again");
   // The ID token comes straight from Google's token endpoint over TLS, so its claims can be read without re-verifying.
-  const claims = t.id_token ? (JSON.parse(Buffer.from(t.id_token.split(".")[1], "base64url").toString()) as { email?: string }) : {};
-  return { email: claims.email ?? "Google account", refreshToken: t.refresh_token, accessToken: t.access_token, expiresAt: Date.now() + t.expires_in * 1000 };
+  const c = t.id_token
+    ? (JSON.parse(Buffer.from(t.id_token.split(".")[1], "base64url").toString()) as { sub?: string; email?: string; name?: string; email_verified?: boolean })
+    : {};
+  if (!c.sub || !c.email) throw new Error("Google didn't return an account identity");
+  const identity: GoogleIdentity = { sub: c.sub, email: c.email, name: c.name ?? c.email.split("@")[0], emailVerified: c.email_verified === true };
+  const tokens: GoogleTokens | null = t.refresh_token
+    ? { refreshToken: t.refresh_token, accessToken: t.access_token, expiresAt: Date.now() + t.expires_in * 1000 }
+    : null;
+  return { identity, tokens, scope: t.scope ?? "" };
 }
 
-export async function revoke(session: GoogleSession) {
-  await fetch(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(session.refreshToken)}`, { method: "POST" }).catch(() => {});
+export async function revoke(token: string) {
+  await fetch(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(token)}`, { method: "POST" }).catch(() => {});
 }
 
-export function cookieHeader(name: string, value: string, maxAge = MAX_AGE, secure = process.env.NODE_ENV === "production") {
-  return `${name}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure ? "; Secure" : ""}`;
-}
-
-export function readCookie(req: Request, name: string) {
-  const header = req.headers.get("cookie") ?? "";
-  for (const part of header.split(/;\s*/)) {
-    const i = part.indexOf("=");
-    if (i > 0 && part.slice(0, i) === name) return decodeURIComponent(part.slice(i + 1));
-  }
-  return undefined;
-}
-
-export function readSession(req: Request) {
-  if (!sealingConfigured()) return null;
-  return unseal<GoogleSession>(readCookie(req, GOOGLE_COOKIE));
-}
-
-export function sessionCookie(session: GoogleSession) {
-  return cookieHeader(GOOGLE_COOKIE, seal(session));
-}
-
-/**
- * Returns a usable access token for the request's Google session, refreshing it
- * when it's about to expire. `setCookie` is set when the stored session changed.
- */
-export async function googleAuth(req: Request): Promise<{ auth?: GoogleAuth; setCookie?: string }> {
-  const session = readSession(req);
-  if (!session || !googleConfigured()) return {};
-  if (session.expiresAt - Date.now() > 60_000) return { auth: { email: session.email, accessToken: session.accessToken } };
+/** The workspace's Google connection as a usable access token, refreshed and persisted when near expiry. */
+export async function googleAuthFor(workspaceId: string): Promise<GoogleAuth | undefined> {
+  if (!googleConfigured()) return undefined;
+  const conn = await getConnection<GoogleTokens>(workspaceId, "google");
+  if (!conn) return undefined;
+  const t = conn.secret;
+  if (t.expiresAt - Date.now() > 60_000) return { email: conn.account, accessToken: t.accessToken };
   try {
-    const t = await tokenRequest({ refresh_token: session.refreshToken, grant_type: "refresh_token" });
-    const next: GoogleSession = { ...session, accessToken: t.access_token, expiresAt: Date.now() + t.expires_in * 1000 };
-    return { auth: { email: next.email, accessToken: next.accessToken }, setCookie: sessionCookie(next) };
+    const r = await tokenRequest({ refresh_token: t.refreshToken, grant_type: "refresh_token" });
+    const next: GoogleTokens = { ...t, accessToken: r.access_token, expiresAt: Date.now() + r.expires_in * 1000 };
+    await setConnection(workspaceId, "google", conn.account, next);
+    return { email: conn.account, accessToken: next.accessToken };
   } catch {
-    // Refresh token revoked or expired: drop the session so the UI asks to reconnect.
-    return { setCookie: cookieHeader(GOOGLE_COOKIE, "", 0) };
+    // Revoked or expired refresh token: drop it so the UI asks to reconnect.
+    await deleteConnection(workspaceId, "google");
+    return undefined;
   }
 }
 

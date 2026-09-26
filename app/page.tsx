@@ -7,18 +7,18 @@ import { useEffect, useState } from "react";
 import { ThemeToggle } from "@/components/shell";
 import { AgentAvatar, Button, Logo, ProviderLogo, ToolLogo } from "@/components/ui";
 import { INTEGRATIONS, PROVIDERS, TEMPLATES } from "@/lib/catalog";
-import { demoState } from "@/lib/seed";
 import { useStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
 export default function Landing() {
-  const { state, ready, replace } = useStore();
+  const { mode, startDemo } = useStore();
   const router = useRouter();
+  const signedIn = mode === "account";
   const openDemo = () => {
-    if (!state.onboarded) replace(demoState());
+    if (mode === "anon") startDemo();
     router.push("/app");
   };
-  const startHref = ready && state.onboarded ? "/app" : "/onboarding";
+  const startHref = signedIn ? "/app" : "/signup";
 
   return (
     <div className="min-h-screen overflow-x-hidden bg-bg">
@@ -33,12 +33,16 @@ export default function Landing() {
           </div>
           <div className="ml-auto flex items-center gap-2">
             <ThemeToggle />
-            <Button variant="ghost" size="sm" onClick={openDemo} className="hidden sm:inline-flex">
-              Live demo
-            </Button>
+            {!signedIn && (
+              <Link href="/login" className="hidden sm:block">
+                <Button variant="ghost" size="sm">
+                  Sign in
+                </Button>
+              </Link>
+            )}
             <Link href={startHref}>
               <Button variant="primary" size="sm">
-                {ready && state.onboarded ? "Open app" : "Get started"}
+                {signedIn ? "Open app" : "Get started"}
               </Button>
             </Link>
           </div>

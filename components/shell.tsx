@@ -7,6 +7,7 @@ import {
   ChevronsUpDown,
   Home,
   Inbox,
+  LogOut,
   LibraryBig,
   Menu,
   Moon,
@@ -41,7 +42,7 @@ const SETUP = [
 ];
 
 export function Shell({ children }: { children: ReactNode }) {
-  const { state, ready, update, refreshLive, toast } = useStore();
+  const { state, ready, mode, account, sync, update, refreshLive, toast, signOut } = useStore();
   const router = useRouter();
   const path = usePathname();
   const [cmd, setCmd] = useState(false);
@@ -49,8 +50,10 @@ export function Shell({ children }: { children: ReactNode }) {
   const [mobile, setMobile] = useState(false);
 
   useEffect(() => {
-    if (ready && !state.onboarded) router.replace("/onboarding");
-  }, [ready, state.onboarded, router]);
+    if (!ready) return;
+    if (mode === "anon") router.replace(`/login?return=${encodeURIComponent(path)}`);
+    else if (!state.onboarded) router.replace("/onboarding");
+  }, [ready, mode, state.onboarded, router, path]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -165,16 +168,26 @@ export function Shell({ children }: { children: ReactNode }) {
         <NavItem key={n.href} {...n} active={path === n.href} />
       ))}
 
-      <div className="mt-auto flex items-center gap-2 rounded-lg px-2 py-2">
-        <div className="flex size-7 items-center justify-center rounded-full bg-fg text-[12px] font-semibold text-bg">
-          {(state.user.name || "Y")[0]}
-        </div>
-        <div className="min-w-0 flex-1 leading-tight">
-          <div className="truncate text-[13px] font-medium">{state.user.name || "You"}</div>
-          <div className="truncate text-[11px] text-muted">{state.user.company || "Personal workspace"}</div>
-        </div>
-        <ThemeToggle />
-        <ChevronsUpDown size={14} className="text-muted" />
+      <div className="mt-auto">
+        {mode === "demo" ? (
+          <div className="mb-2 rounded-xl border border-accent/25 bg-accent-soft/60 p-3 text-[13px]">
+            <div className="font-medium text-accent-ink">You're in the demo</div>
+            <p className="mt-0.5 text-xs leading-relaxed text-fg-2">Sample data, simulated runs. Create an account to connect your real tools.</p>
+            <Link href="/signup" className="mt-2 inline-flex h-7 items-center rounded-md bg-accent px-2.5 text-xs font-medium text-accent-fg hover:brightness-110">
+              Create account
+            </Link>
+          </div>
+        ) : null}
+        <AccountMenu
+          name={state.user.name || account?.name || "You"}
+          detail={mode === "account" ? (account?.email ?? "") : "Demo workspace"}
+          sync={mode === "account" ? sync : null}
+          onSignOut={async () => {
+            await signOut();
+            router.push(mode === "demo" ? "/" : "/login");
+          }}
+          signOutLabel={mode === "demo" ? "Leave demo" : "Sign out"}
+        />
       </div>
     </nav>
   );
@@ -244,6 +257,56 @@ function SectionLabel({ children, action }: { children: ReactNode; action?: Reac
     <div className="mt-5 mb-1 flex items-center justify-between px-2 text-[11px] font-medium tracking-wide text-muted uppercase">
       {children}
       {action}
+    </div>
+  );
+}
+
+function AccountMenu({
+  name,
+  detail,
+  sync,
+  onSignOut,
+  signOutLabel,
+}: {
+  name: string;
+  detail: string;
+  sync: "saved" | "saving" | "offline" | null;
+  onSignOut: () => void;
+  signOutLabel: string;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative">
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="animate-pop absolute right-0 bottom-full left-0 z-50 mb-1 rounded-xl border border-line bg-surface p-1 shadow-pop">
+            <div className="truncate px-2.5 py-2 text-xs text-muted">{detail}</div>
+            <button onClick={onSignOut} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm hover:bg-surface-2">
+              <LogOut size={14} className="text-muted" /> {signOutLabel}
+            </button>
+          </div>
+        </>
+      )}
+      <div className="flex items-center gap-2 rounded-lg px-2 py-2">
+        <button onClick={() => setOpen((v) => !v)} className="flex min-w-0 flex-1 items-center gap-2 text-left" aria-haspopup="menu" aria-expanded={open}>
+          <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-fg text-[12px] font-semibold text-bg">{name[0]?.toUpperCase()}</div>
+          <div className="min-w-0 flex-1 leading-tight">
+            <div className="truncate text-[13px] font-medium">{name}</div>
+            <div className="flex items-center gap-1 truncate text-[11px] text-muted">
+              {sync && (
+                <span
+                  className={cn("size-1.5 shrink-0 rounded-full", sync === "saved" ? "bg-ok" : sync === "saving" ? "bg-warn" : "bg-danger")}
+                  title={sync === "saved" ? "All changes saved" : sync === "saving" ? "Saving…" : "Offline — will retry"}
+                />
+              )}
+              {sync === "saving" ? "Saving…" : sync === "offline" ? "Offline — retrying" : detail}
+            </div>
+          </div>
+          <ChevronsUpDown size={14} className="shrink-0 text-muted" />
+        </button>
+        <ThemeToggle />
+      </div>
     </div>
   );
 }

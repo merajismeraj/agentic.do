@@ -116,7 +116,7 @@ export default function IntegrationsPage() {
                     variant="ghost"
                     onClick={async () => {
                       if (google && live?.google.email) {
-                        await fetch("/api/oauth/google/disconnect", { method: "POST" }).catch(() => {});
+                        await fetch("/api/connections/google", { method: "DELETE" }).catch(() => {});
                         update((s) => ({ ...s, connected: s.connected.filter((x) => !GOOGLE.includes(x)) }));
                         await refreshLive();
                         toast("Google disconnected — Gmail and Calendar access revoked");

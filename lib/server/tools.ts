@@ -38,6 +38,8 @@ export interface ToolDef {
   run: (input: Record<string, unknown>, ctx: ToolContext) => Promise<ToolResult>;
   /** Fields shown on the approval card for write tools. */
   preview?: (input: Record<string, unknown>) => { label: string; value: string }[];
+  /** Approval-card labels the user may edit, mapped to the string input field they change. */
+  editable?: Record<string, string>;
 }
 
 const env = (k: string) => process.env[k]?.trim() || undefined;
@@ -127,6 +129,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "gmail_send",
+    editable: { To: "to", Subject: "subject", Body: "body" },
     integration: "gmail",
     kind: "write",
     label: "Sending email",
@@ -183,6 +186,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "calendar_create_event",
+    editable: { Event: "title" },
     integration: "gcal",
     kind: "write",
     label: "Creating calendar event",
@@ -241,6 +245,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "slack_post_message",
+    editable: { Channel: "channel", Message: "text" },
     integration: "slack",
     kind: "write",
     label: "Posting to Slack",
@@ -304,6 +309,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "github_comment",
+    editable: { Comment: "body" },
     integration: "github",
     kind: "write",
     label: "Commenting on GitHub",
@@ -354,6 +360,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "linear_create_issue",
+    editable: { Title: "title", Description: "description" },
     integration: "linear",
     kind: "write",
     label: "Creating Linear issue",
@@ -393,6 +400,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "hubspot_update_deal",
+    editable: { Record: "record", Change: "change" },
     integration: "hubspot",
     kind: "write",
     label: "Updating HubSpot",

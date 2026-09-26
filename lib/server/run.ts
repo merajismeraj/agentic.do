@@ -149,7 +149,7 @@ How you work:
 
 /* ------------------------------ Demo mode --------------------------- */
 
-async function simulate(req: RunRequest, emit: Emit, hasBrains: boolean) {
+export async function simulate(req: RunRequest, emit: Emit, hasBrains: boolean) {
   const state = {
     ...EMPTY,
     user: req.user,

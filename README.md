@@ -4,10 +4,12 @@ AI teammates that connect to your tools, understand your context, and get work d
 
 ```bash
 npm install
-npm run dev        # http://localhost:3000
+cp .env.example .env.local   # set SESSION_SECRET at minimum
+npm run dev                  # http://localhost:3000
+npm test                     # API + auth + Google suite (in-memory Postgres, mocked vendors)
 ```
 
-Click **Explore live demo** on the landing page for a fully populated workspace, or **Get started** for the 2‑minute onboarding.
+**Get started** creates an account and runs the 2‑minute onboarding. **Explore live demo** opens a sample workspace with no account: it lives in the browser and is always simulated.
 
 ## Product surface
 
@@ -38,13 +40,24 @@ Global: `⌘K` command palette (navigate or delegate in one line), light/dark th
 - Next.js 16 (App Router) · React 19 · Tailwind CSS 4 · TypeScript
 - `lib/catalog.ts` — providers, integrations, teammate templates
 - `lib/engine.ts` — routing (`route`), planning (`plan`), auto‑assignment (`assign`)
-- `lib/store.tsx` — client store persisted to `localStorage`; streams runs from `/api/run`, executes approvals
+- `lib/store.tsx` — client store: account mode (server-synced, versioned) or demo mode (browser-only)
+- `lib/server/db.ts` — Postgres (`DATABASE_URL`) or embedded PGlite; schema bootstrapped on start
+- `lib/server/auth.ts` — accounts (scrypt), sessions (hashed tokens), same-origin checks
+- `lib/server/workspace.ts` — workspace document, messages, approvals, activity, encrypted connections
 - `lib/seed.ts` — empty and demo workspaces
 - `lib/server/run.ts` — run orchestrator: routing, failover, tool loop, approval gate, NDJSON events
 - `lib/server/providers.ts` — Anthropic SDK adapter + OpenAI-compatible adapter (OpenAI, Gemini, xAI, Mistral, DeepSeek, Perplexity)
 - `lib/server/tools.ts` — tool registry; live connectors for Slack, GitHub and Linear, demo data for the rest
-- `lib/server/google.ts` + `lib/server/seal.ts` — Google OAuth, Gmail/Calendar client, encrypted session cookie
-- `app/api/run` (stream a run) · `app/api/approve` (execute an approved action) · `app/api/status` (what's live) · `app/api/oauth/google/*` (start, callback, disconnect)
+- `lib/server/google.ts` + `lib/server/seal.ts` — Google sign-in and Gmail/Calendar connection, AES-256-GCM sealing
+- API: `auth/{signup,login,logout}` · `auth/google/{start,callback}` · `me` · `workspace` · `run` · `approvals/[id]` · `connections/google` · `status`
+
+## Accounts and data
+
+- **Sign-in:** email + password (scrypt, 10+ chars, rate-limited) or **Sign in with Google** (identity scopes only). A Google login links to an existing account only when Google says the email is verified.
+- **Sessions:** a random 256-bit token in an httpOnly, SameSite=Lax cookie; the database stores only its SHA-256. Writes also require a same-origin `Origin` header.
+- **Workspace:** teammates, routines, AI accounts, context and profile are one versioned document per account. Every save sends the version it was based on, so two tabs can't silently overwrite each other; the loser gets the latest copy.
+- **Server-authoritative:** messages, approvals and activity are written by the server. A run takes only `agentId` + `text` from the browser; the teammate's tools, prompt, AI accounts and memory are loaded from the database. Approving executes the stored action; the browser can edit only the text fields that tool declares editable, and an action can't execute twice.
+- **Demo:** signed-out visitors get a browser-only sample workspace. `/api/run` simulates it without calling any model or tool, so the demo can't spend your API credit.
 
 ## Execution
 
@@ -63,16 +76,19 @@ Live connectors today: **Gmail and Google Calendar** (per-user Google sign-in), 
 
 1. In Google Cloud, enable the **Gmail API** and the **Google Calendar API**.
 2. Configure the OAuth consent screen. While it's in *Testing*, add your own Google account as a test user.
-3. Create an OAuth client of type **Web application** with the redirect URI `http://localhost:3000/api/oauth/google/callback` (plus your production URL).
+3. Create an OAuth client of type **Web application** with the redirect URI `http://localhost:3000/api/auth/google/callback` (plus your production URL).
 4. Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` and `SESSION_SECRET` (32+ random characters).
-5. In the app, open **Integrations → Gmail → Connect** (or **Go live**) and choose **Continue with Google**.
+5. **Continue with Google** now appears on the sign-in page. To give teammates Gmail and Calendar, open **Integrations → Gmail → Connect** (or **Go live**).
 
-One sign-in covers both tools. Scopes: `gmail.readonly`, `gmail.send`, `calendar.events`, plus `openid email`. The refresh token is stored in an **AES-256-GCM encrypted, httpOnly cookie**, so each browser acts as its own Google account and the server keeps no Google credentials. **Disconnect** revokes the token at Google.
+Signing in only asks for identity (`openid email profile`). Connecting asks for `gmail.readonly`, `gmail.send` and `calendar.events`; one consent covers both tools. Tokens are stored per workspace, **encrypted with AES-256-GCM**, and refreshed automatically, which is what will let scheduled routines use them later. **Disconnect** revokes the token at Google and deletes it.
 
 What teammates can do with it: search mail (Gmail query syntax), read a day's calendar in your timezone, and, after you approve, send email (threaded replies when replying) and create events with invites.
 
 Before a public launch: `gmail.readonly` and `gmail.send` are restricted scopes, so Google requires app verification and a third-party security assessment. Until then, only test users can connect.
 
-`npm test` runs the Google suite against a mocked Google API: sign-in, state check, redirect safety, encrypted session, refresh, Gmail and Calendar calls, header-injection safety, and revoke.
+`npm test` runs 17 end-to-end checks against the real route handlers: accounts, sessions, rate limits, cross-site blocking, workspace versioning, persisted runs, approval tampering and double-execution, cross-account isolation, demo lockdown, and the Google sign-in, connect, refresh and send paths.
 
-**Not production‑ready yet:** there are no user accounts. Google actions use the caller's own session, but the provider API keys and the Slack, GitHub and Linear tokens are server-wide, and `/api/run` and `/api/approve` are unauthenticated. Keep deployments private until auth lands. Workspace state still lives in the browser (`localStorage`).
+**Before production:**
+- AI provider keys and the Slack, GitHub and Linear tokens are still **server-wide**, so every account uses them. Give each workspace its own keys before inviting other people.
+- The login rate limiter is in-memory, so it's per instance. Use Redis or Upstash when running more than one.
+- There's no email verification or password reset yet.

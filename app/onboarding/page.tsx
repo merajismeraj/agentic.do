@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import { input } from "@/components/agent-config";
 import { AgentAvatar, Button, Logo, ProviderLogo, ToolLogo } from "@/components/ui";
 import { INTEGRATIONS, PROVIDERS, TEMPLATES } from "@/lib/catalog";
-import { demoState, EMPTY, hire } from "@/lib/seed";
+import { EMPTY, hire } from "@/lib/seed";
 import { useStore } from "@/lib/store";
 import type { ProviderId, State } from "@/lib/types";
 import { cn, uid } from "@/lib/utils";
@@ -24,7 +24,7 @@ const ROLES = [
 const STEPS = ["You", "AI", "Tools", "Team"];
 
 export default function Onboarding() {
-  const { replace, state, ready } = useStore();
+  const { finishOnboarding, state, ready, mode, account, signOut } = useStore();
   const router = useRouter();
   const [step, setStep] = useState(0);
   const [name, setName] = useState("");
@@ -37,8 +37,16 @@ export default function Onboarding() {
   const [building, setBuilding] = useState(-1);
 
   useEffect(() => {
-    if (ready && state.onboarded) router.replace("/app");
-  }, [ready, state.onboarded, router]);
+    // While finishing, the page navigates to the new teammate itself.
+    if (!ready || building >= 0) return;
+    if (mode !== "account") router.replace("/signup");
+    else if (state.onboarded) router.replace("/app");
+  }, [ready, mode, state.onboarded, router, building]);
+
+  useEffect(() => {
+    if (account?.name && !name) setName(account.name);
+    // Prefill once when the account loads.
+  }, [account]);
 
   useEffect(() => {
     setTools(role.tools);
@@ -93,8 +101,10 @@ export default function Onboarding() {
           ? [{ id: uid(), text: `${name.trim()} works at ${company.trim()} (${role.label}).`, source: "Onboarding", scope: "me" }]
           : [],
       };
-      replace(next);
-      router.push(first ? `/app/agents/${first.id}` : "/app");
+      finishOnboarding(next).then((ok) => {
+        if (ok) router.push(first ? `/app/agents/${first.id}` : "/app");
+        else setBuilding(-1);
+      });
     }, 2600);
   };
 
@@ -135,14 +145,8 @@ export default function Onboarding() {
         <Link href="/">
           <Logo />
         </Link>
-        <button
-          onClick={() => {
-            replace(demoState());
-            router.push("/app");
-          }}
-          className="text-sm text-muted hover:text-fg"
-        >
-          Skip — explore a demo workspace →
+        <button onClick={() => signOut().then(() => router.push("/"))} className="text-sm text-muted hover:text-fg">
+          {account?.email ? `Signed in as ${account.email} · Sign out` : "Sign out"}
         </button>
       </header>
 

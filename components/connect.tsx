@@ -124,20 +124,20 @@ const GOOGLE_TOOLS = ["gmail", "gcal"];
 
 /** OAuth consent for a work tool: real Google sign-in when configured, simulated otherwise. */
 export function ConnectTool({ id, onClose }: { id: string | null; onClose: () => void }) {
-  const { update, toast, live } = useStore();
+  const { update, toast, live, mode } = useStore();
   const [busy, setBusy] = useState(false);
   const i = id ? integrationById(id) : null;
   useEffect(() => setBusy(false), [id]);
   if (!i) return null;
 
   const isGoogle = GOOGLE_TOOLS.includes(i.id);
-  const realGoogle = isGoogle && !!live?.google.configured;
+  const realGoogle = isGoogle && mode === "account" && !!live?.google.configured;
 
   const connect = () => {
     setBusy(true);
     if (realGoogle) {
       // Full-page redirect to Google's consent screen; we land back on this page.
-      window.location.href = `/api/oauth/google/start?return=${encodeURIComponent(window.location.pathname)}`;
+      window.location.href = `/api/auth/google/start?purpose=connect&return=${encodeURIComponent(window.location.pathname)}`;
       return;
     }
     setTimeout(() => {
@@ -177,8 +177,10 @@ export function ConnectTool({ id, onClose }: { id: string | null; onClose: () =>
         {isGoogle && (
           <p className="mt-2 rounded-lg bg-surface-2 px-3 py-2 text-center text-xs leading-relaxed text-muted">
             {realGoogle
-              ? "One Google sign-in connects both Gmail and Calendar. Tokens are encrypted and stay tied to this browser."
-              : "Google sign-in isn't configured on this server, so this connects with demo data. Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and SESSION_SECRET to go live."}
+              ? "One Google sign-in connects both Gmail and Calendar. Tokens are encrypted and stored with your workspace, so routines can run while you're away."
+              : mode !== "account"
+                ? "This is the demo, so Gmail connects with sample data. Create an account to connect your real Google."
+                : "Google sign-in isn't configured on this server, so this connects with demo data. Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and SESSION_SECRET to go live."}
           </p>
         )}
         <Button variant="primary" size="lg" className="mt-5 w-full" onClick={connect} disabled={busy}>
