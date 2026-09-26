@@ -74,3 +74,16 @@ export async function saveAiKey(ws: Workspace, id: ProviderId, apiKey: string) {
 export async function deleteAiKey(ws: Workspace, id: ProviderId) {
   await deleteConnection(ws.id, PREFIX + id);
 }
+
+/** Everything a run or approval needs to act for this workspace: tool credentials and AI keys. */
+export async function workspaceContext(ws: Workspace) {
+  const [access, google, slack] = await Promise.all([
+    accessFor(ws),
+    import("./google").then((m) => m.googleAuthFor(ws.id)),
+    import("./slack").then((m) => m.slackAuthFor(ws.id)),
+  ]);
+  return {
+    access,
+    ctx: { google, slack, shared: access.shared, timeZone: ws.doc.user?.timezone || "UTC" },
+  };
+}

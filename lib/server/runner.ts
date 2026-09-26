@@ -1,8 +1,7 @@
 import "server-only";
 import type { Agent, Approval, Message, RunEvent, RunRequest, Step } from "../types";
 import { newId } from "./auth";
-import { googleAuthFor } from "./google";
-import { accessFor } from "./keys";
+import { workspaceContext } from "./keys";
 import { execute } from "./run";
 import { finishMessage, insertApproval, insertMessage, logActivity, threadHistory, type Workspace } from "./workspace";
 
@@ -51,8 +50,7 @@ export async function runTeammate(opts: {
     memory: ws.doc.memory,
     user: ws.doc.user,
   };
-  const access = await accessFor(ws);
-  const ctx = { google: await googleAuthFor(ws.id), timeZone: ws.doc.user.timezone || "UTC", shared: access.shared };
+  const { access, ctx } = await workspaceContext(ws);
 
   const steps: Step[] = [];
   const approvals: Approval[] = [];

@@ -197,12 +197,18 @@ export function ConnectTool({ id, onClose }: { id: string | null; onClose: () =>
 
   const isGoogle = GOOGLE_TOOLS.includes(i.id);
   const realGoogle = isGoogle && mode === "account" && !!live?.google.configured;
+  const isSlack = i.id === "slack";
+  const realSlack = isSlack && mode === "account" && !!live?.slack.configured;
 
   const connect = () => {
     setBusy(true);
     if (realGoogle) {
       // Full-page redirect to Google's consent screen; we land back on this page.
       window.location.href = `/api/auth/google/start?purpose=connect&return=${encodeURIComponent(window.location.pathname)}`;
+      return;
+    }
+    if (realSlack) {
+      window.location.href = `/api/auth/slack/start?return=${encodeURIComponent(window.location.pathname)}`;
       return;
     }
     setTimeout(() => {
@@ -239,6 +245,15 @@ export function ConnectTool({ id, onClose }: { id: string | null; onClose: () =>
           ))}
         </div>
         <p className="mt-3 text-center text-xs text-muted">Anything that leaves your company still waits for your approval.</p>
+        {isSlack && (
+          <p className="mt-2 rounded-lg bg-surface-2 px-3 py-2 text-center text-xs leading-relaxed text-muted">
+            {realSlack
+              ? "Adds the agentic.do bot to your Slack. It joins public channels when asked to read them; invite it to private ones with /invite. Posts always need your approval."
+              : mode !== "account"
+                ? "This is the demo, so Slack connects with sample data. Create an account to connect your real Slack."
+                : "Slack sign-in isn't configured on this server, so this connects with demo data. Set SLACK_CLIENT_ID and SLACK_CLIENT_SECRET to go live."}
+          </p>
+        )}
         {isGoogle && (
           <p className="mt-2 rounded-lg bg-surface-2 px-3 py-2 text-center text-xs leading-relaxed text-muted">
             {realGoogle
@@ -255,6 +270,8 @@ export function ConnectTool({ id, onClose }: { id: string | null; onClose: () =>
             </>
           ) : realGoogle ? (
             "Continue with Google"
+          ) : realSlack ? (
+            "Add to Slack"
           ) : (
             `Authorize ${i.name}`
           )}

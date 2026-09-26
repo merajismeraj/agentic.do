@@ -91,6 +91,25 @@ export function Shell({ children }: { children: ReactNode }) {
     window.history.replaceState(null, "", window.location.pathname);
   }, [ready, update, refreshLive, toast]);
 
+  // Returning from "Add to Slack": confirm with the server before claiming success.
+  useEffect(() => {
+    if (!ready) return;
+    const params = new URLSearchParams(window.location.search);
+    const sl = params.get("slack");
+    if (!sl) return;
+    if (sl === "connected" || sl === "partial") {
+      refreshLive().then((st) => {
+        if (st?.slack.team) {
+          update((s) => ({ ...s, connected: [...new Set([...s.connected, "slack"])] }));
+          toast(sl === "partial" ? `Slack connected to ${st.slack.team}, but some permissions were declined` : `Slack connected to ${st.slack.team}`);
+        } else toast("Slack didn't finish connecting — try again");
+      });
+    } else if (sl === "denied") toast("Slack access was not granted");
+    else if (sl === "not_configured") toast("Slack isn't set up on this server yet");
+    else toast(`Couldn't connect Slack${params.get("message") ? `: ${params.get("message")}` : ""}`);
+    window.history.replaceState(null, "", window.location.pathname);
+  }, [ready, update, refreshLive, toast]);
+
   useEffect(() => {
     const open = () => setHire(true);
     window.addEventListener(HIRE_EVENT, open);

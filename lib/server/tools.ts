@@ -1,5 +1,6 @@
 import "server-only";
 import { calendarCreate, calendarDay, gmailSearch, gmailSend, type GoogleAuth } from "./google";
+import { postMessage, readChannel, type SlackAuth } from "./slack";
 
 /**
  * Tool registry. Each tool belongs to an integration, declares whether it only
@@ -27,6 +28,8 @@ export interface ToolContext {
   timeZone: string;
   /** May use the operator's server-wide tokens (SHARED_AI_KEYS); otherwise those tools use demo data. */
   shared?: boolean;
+  /** This workspace's own Slack install. */
+  slack?: SlackAuth;
 }
 
 export interface ToolDef {
@@ -52,28 +55,8 @@ const demo = (summary: string, data: unknown): ToolResult => ({ ok: true, live: 
 
 /* ------------------------------ Slack ------------------------------ */
 
-async function slack<T = unknown>(method: string, body: Record<string, unknown>): Promise<T> {
-  const res = await fetch(`https://slack.com/api/${method}`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${env("SLACK_BOT_TOKEN")}`, "Content-Type": "application/json; charset=utf-8" },
-    body: JSON.stringify(body),
-  });
-  const json = (await res.json()) as { ok: boolean; error?: string } & Record<string, unknown>;
-  if (!json.ok) throw new Error(`Slack ${method}: ${json.error ?? res.status}`);
-  return json as T;
-}
-
-async function slackChannelId(name: string) {
-  if (/^[CG][A-Z0-9]+$/.test(name)) return name;
-  const clean = name.replace(/^#/, "");
-  const list = await slack<{ channels: { id: string; name: string }[] }>("conversations.list", {
-    limit: 1000,
-    types: "public_channel,private_channel",
-  });
-  const hit = list.channels.find((c) => c.name === clean);
-  if (!hit) throw new Error(`Slack channel #${clean} not found or bot not invited`);
-  return hit.id;
-}
+/** The workspace's own Slack install wins; the operator's token only for shared accounts. */
+const slackToken = (ctx: ToolContext) => ctx.slack?.token ?? tok(ctx, "SLACK_BOT_TOKEN");
 
 /* ------------------------------ GitHub ----------------------------- */
 
@@ -229,22 +212,19 @@ export const TOOLS: ToolDef[] = [
     integration: "slack",
     kind: "read",
     label: "Reading Slack",
-    description: "Read the most recent messages from a Slack channel, e.g. '#eng'.",
-    input_schema: { type: "object", properties: { channel: { type: "string" }, limit: { type: "number" } }, required: ["channel"] },
-    isLive: (ctx) => !!tok(ctx, "SLACK_BOT_TOKEN"),
+    description: "Read the most recent messages from a Slack channel, e.g. '#eng'. Returns who said what and when. Public channels are joined automatically; private ones need the bot invited.",
+    input_schema: { type: "object", properties: { channel: { type: "string" }, limit: { type: "number", description: "How many messages (default 20, max 50)" } }, required: ["channel"] },
+    isLive: (ctx) => !!slackToken(ctx),
     run: async ({ channel, limit }, ctx) => {
-      if (!tok(ctx, "SLACK_BOT_TOKEN"))
+      const token = slackToken(ctx);
+      if (!token)
         return demo(`12 recent messages in ${str(channel)}`, [
-          { user: "maya", text: "billing v2 PR is up, needs review" },
-          { user: "jon", text: "search reindex finished overnight ✅" },
-          { user: "lee", text: "ENG-412 still blocked on design review" },
+          { from: "maya", text: "billing v2 PR is up, needs review" },
+          { from: "jon", text: "search reindex finished overnight ✅" },
+          { from: "lee", text: "ENG-412 still blocked on design review" },
         ]);
-      const id = await slackChannelId(str(channel));
-      const h = await slack<{ messages: { user?: string; text: string }[] }>("conversations.history", {
-        channel: id,
-        limit: Math.min(Number(limit) || 20, 50),
-      });
-      return { ok: true, live: true, summary: `${h.messages.length} messages in ${str(channel)}`, data: h.messages.map((m) => ({ user: m.user, text: m.text })) };
+      const messages = await readChannel(token, str(channel), Math.min(Math.max(Number(limit) || 20, 1), 50));
+      return { ok: true, live: true, summary: `${messages.length} messages in ${str(channel)}`, data: messages };
     },
   },
   {
@@ -253,18 +233,18 @@ export const TOOLS: ToolDef[] = [
     integration: "slack",
     kind: "write",
     label: "Posting to Slack",
-    description: "Post a message to a Slack channel. Requires approval.",
+    description: "Post a message to a Slack channel as the agentic.do bot. Requires approval.",
     input_schema: { type: "object", properties: { channel: { type: "string" }, text: { type: "string" } }, required: ["channel", "text"] },
-    isLive: (ctx) => !!tok(ctx, "SLACK_BOT_TOKEN"),
+    isLive: (ctx) => !!slackToken(ctx),
     preview: (i) => [
       { label: "Channel", value: str(i.channel) },
       { label: "Message", value: str(i.text) },
     ],
     run: async ({ channel, text }, ctx) => {
-      if (!tok(ctx, "SLACK_BOT_TOKEN")) return demo(`Posted to ${str(channel)} (demo)`, null);
-      const id = await slackChannelId(str(channel));
-      await slack("chat.postMessage", { channel: id, text: str(text) });
-      return { ok: true, live: true, summary: `Posted to ${str(channel)}` };
+      const token = slackToken(ctx);
+      if (!token) return demo(`Demo only — nothing was posted to ${str(channel)} (connect Slack to post for real)`, null);
+      await postMessage(token, str(channel), str(text));
+      return { ok: true, live: true, summary: `Posted to ${str(channel)}${ctx.slack ? ` in ${ctx.slack.team}` : ""}` };
     },
   },
   {

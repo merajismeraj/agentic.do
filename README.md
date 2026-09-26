@@ -55,8 +55,9 @@ Global: `⌘K` command palette (navigate or delegate in one line), light/dark th
 - `lib/server/scheduler.ts` — finds due routines, claims each occurrence once, runs them; `instrumentation.ts` + `api/cron/tick` drive it
 - `lib/server/notify.ts` + `lib/server/mailer.ts` — email alert outbox (dedupe, grouping, retries) and Resend delivery
 - `scripts/supabase-cron.mts` — installs the Supabase `pg_cron` job (secret in Vault)
+- `lib/server/slack.ts` — Add to Slack (OAuth v2), Web API client (form-encoded), channel lookup, auto-join, name resolution
 - `lib/server/google.ts` + `lib/server/seal.ts` — Google sign-in and Gmail/Calendar connection, AES-256-GCM sealing
-- API: `auth/{signup,login,logout,verify,verify/resend,forgot,reset}` · `auth/google/{start,callback}` · `me` · `workspace` · `run` · `approvals/[id]` · `connections/google` · `status` · `cron/tick` · `notifications/test` · `ai-keys/[provider]`
+- API: `auth/{signup,login,logout,verify,verify/resend,forgot,reset}` · `auth/google/{start,callback}` · `auth/slack/{start,callback}` · `me` · `workspace` · `run` · `approvals/[id]` · `connections/{google,slack}` · `status` · `cron/tick` · `notifications/test` · `ai-keys/[provider]`
 
 ## Accounts and data
 
@@ -121,7 +122,28 @@ How a run works:
 3. **Approval gate.** Write actions (send email, post to Slack, create issue…) are never executed during the run unless the teammate has full autonomy. They become approval cards. **Approve** calls `/api/approve`, which runs the action, with any edits you made on the card.
 4. **Failover.** If a provider errors before any tool has run, the run moves to the next ranked provider. After a tool has run, it stops rather than risk doing the work twice.
 
-Live connectors today: **Gmail and Google Calendar** (per-user Google sign-in), Slack (`SLACK_BOT_TOKEN`), GitHub (`GITHUB_TOKEN`, `GITHUB_REPO`), Linear (`LINEAR_API_KEY`). Notion, HubSpot, Stripe and Intercom return demo data until their OAuth is added.
+Live connectors today: **Gmail and Google Calendar** (per-workspace Google sign-in), **Slack** (per-workspace "Add to Slack"), plus GitHub (`GITHUB_TOKEN`, `GITHUB_REPO`) and Linear (`LINEAR_API_KEY`) for shared accounts only. Notion, HubSpot, Stripe and Intercom return demo data until their OAuth is added.
+
+### Slack
+
+Each workspace installs the agentic.do bot into its own Slack. Teammates can then read channels, showing who said what, and, after you approve, post to them.
+
+Setup:
+1. At [api.slack.com/apps](https://api.slack.com/apps) choose **Create New App → From scratch**.
+2. Under **OAuth & Permissions**:
+   - Add the redirect URL `https://<your APP_URL>/api/auth/slack/callback`. Slack only accepts HTTPS, so for local development run a tunnel (e.g. `ngrok http 3000`) and set `APP_URL` to it.
+   - Add these **Bot Token Scopes**: `channels:read`, `channels:history`, `channels:join`, `groups:read`, `groups:history`, `chat:write`, `users:read`.
+3. Copy the **Client ID** and **Client Secret** from *Basic Information* into `SLACK_CLIENT_ID` and `SLACK_CLIENT_SECRET`. `SESSION_SECRET` must be set too.
+4. To let *other* Slack workspaces install it, turn on **Manage Distribution → Public Distribution**. Without it, only your own Slack can.
+
+Behaviour:
+- **Connect:** Integrations → Slack → **Add to Slack**. The bot token is stored per workspace, encrypted, and never sent to the browser.
+- **Reading:** public channels are joined automatically when a teammate reads them. Private channels need `/invite @agentic.do`. Author IDs are turned into names.
+- **Posting:** always goes through Approvals, as the bot.
+- **Disconnect:** revokes the token at Slack, which removes the bot, and deletes it.
+- **Priority:** a workspace's own install always wins. The server's `SLACK_BOT_TOKEN` is only used for accounts allowed by `SHARED_AI_KEYS`.
+
+Message text from Slack (and email) comes from other people, so teammates are told to treat it as information, never as instructions. Anything outgoing still needs your approval.
 
 ### Google sign-in (Gmail + Calendar)
 
@@ -137,11 +159,11 @@ What teammates can do with it: search mail (Gmail query syntax), read a day's ca
 
 Before a public launch: `gmail.readonly` and `gmail.send` are restricted scopes, so Google requires app verification and a third-party security assessment. Until then, only test users can connect.
 
-`npm test` runs the schedule unit tests plus 33 end-to-end checks against the real route handlers: accounts, sessions, rate limits, cross-site blocking, workspace versioning, persisted runs, approval tampering and double-execution, cross-account isolation, demo lockdown, the Google sign-in, connect, refresh and send paths, and the scheduler (exactly-once under concurrency, timezone, catch-up window, paused teammates, no fabricated runs, cron auth, Run now), email alerts (grouping, dedupe, escaping, retries, preferences), per-workspace keys (verification, encryption, isolation, never returned), and account emails (confirmation, no-enumeration reset, session revocation, pre-hijack takeover).
+`npm test` runs the schedule unit tests plus 36 end-to-end checks against the real route handlers: accounts, sessions, rate limits, cross-site blocking, workspace versioning, persisted runs, approval tampering and double-execution, cross-account isolation, demo lockdown, the Google sign-in, connect, refresh and send paths, and the scheduler (exactly-once under concurrency, timezone, catch-up window, paused teammates, no fabricated runs, cron auth, Run now), email alerts (grouping, dedupe, escaping, retries, preferences), per-workspace keys (verification, encryption, isolation, never returned), account emails (confirmation, no-enumeration reset, session revocation, pre-hijack takeover), and Slack (install, paging, auto-join, approval-gated posting with the workspace's own token, revoke).
 
 **Before production:**
 - Leave `SHARED_AI_KEYS` unset (or list only your own email) before letting others sign up.
-- Slack, GitHub and Linear still only have server-wide tokens (shared accounts only). Per-workspace OAuth for them is still to do.
+- GitHub and Linear still only have server-wide tokens (shared accounts only). Per-workspace OAuth for them is still to do.
 - Plan-usage meters aren't tracked for real accounts yet, so routing weighs fit rather than remaining quota.
 - The login rate limiter is in-memory, so it's per instance. Use Redis or Upstash when running more than one.
 - The scheduler scans every workspace on each tick. That's fine for thousands of workspaces; beyond that, store the next run time and index it.

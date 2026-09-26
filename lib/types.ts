@@ -218,5 +218,6 @@ export interface LiveStatus {
   /** This account may use the operator's server-wide keys and tool tokens. */
   sharedKeys: boolean;
   google: { configured: boolean; email?: string };
+  slack: { configured: boolean; team?: string };
   email: { configured: boolean };
 }
