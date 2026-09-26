@@ -4,14 +4,14 @@ import { Check, Search } from "lucide-react";
 import { useState } from "react";
 import { ConnectTool } from "@/components/connect";
 import { PageHeader } from "@/components/shell";
-import { AgentAvatar, Button, Card, Segmented, ToolLogo } from "@/components/ui";
+import { AgentAvatar, Badge, Button, Card, Segmented, ToolLogo } from "@/components/ui";
 import { INTEGRATIONS } from "@/lib/catalog";
 import { useStore } from "@/lib/store";
 import type { IntegrationCategory } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 export default function IntegrationsPage() {
-  const { state, update, toast } = useStore();
+  const { state, update, toast, live } = useStore();
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<"all" | "connected">("all");
   const [cat, setCat] = useState<IntegrationCategory | "All">("All");
@@ -98,7 +98,10 @@ export default function IntegrationsPage() {
                     {i.name}
                     {on && <Check size={14} className="text-ok" />}
                   </div>
-                  <div className="text-xs text-muted">{i.category}</div>
+                  <div className="flex items-center gap-1.5 text-xs text-muted">
+                    {i.category}
+                    {on && live && (live.tools[i.id] ? <Badge tone="ok">Live API</Badge> : <Badge>Demo data</Badge>)}
+                  </div>
                 </div>
                 {on ? (
                   <Button

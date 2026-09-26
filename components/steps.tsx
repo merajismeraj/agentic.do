@@ -8,7 +8,7 @@ import { ProviderLogo, ToolLogo } from "./ui";
 
 /** Collapsible trace of what the agent did — transparency builds trust. */
 export function Steps({ steps }: { steps: Step[] }) {
-  const running = steps.some((s) => s.state !== "done");
+  const running = !steps.length || steps.some((s) => s.state !== "done");
   const [open, setOpen] = useState(false);
   const show = running || open;
   const current = steps.find((s) => s.state === "running");

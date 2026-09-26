@@ -119,17 +119,28 @@ function Chat({ agent, onTab }: { agent: Agent; onTab: (t: Tab) => void }) {
                   <div className="mb-1 flex items-baseline gap-2 text-sm">
                     <span className="font-semibold">{agent.name}</span>
                     <span className="text-xs text-muted">{ago(m.at)}</span>
+                    {m.mode === "demo" && (
+                      <Link href="/app/brains" title="No API key configured — this run used demo data">
+                        <Badge>Demo</Badge>
+                      </Link>
+                    )}
+                    {m.mode === "live" && <Badge tone="ok">Live</Badge>}
                   </div>
-                  {m.steps && m.steps.length > 0 && <Steps steps={m.steps} />}
+                  {m.steps && (m.steps.length > 0 || (!m.text && !m.error)) && <Steps steps={m.steps} />}
                   {m.text && <Rich text={m.text} />}
-                  {m.approvalId && (
-                    <div className="mt-3">
-                      {(() => {
-                        const a = state.approvals.find((x) => x.id === m.approvalId);
-                        return a ? <ApprovalCard approval={a} /> : null;
-                      })()}
+                  {m.error && (
+                    <div className="mt-1 rounded-lg bg-danger-soft px-3 py-2 text-[13px] text-danger">
+                      Something went wrong: {m.error}
                     </div>
                   )}
+                  {(m.approvalIds ?? (m.approvalId ? [m.approvalId] : [])).map((aid) => {
+                    const a = state.approvals.find((x) => x.id === aid);
+                    return a ? (
+                      <div key={aid} className="mt-3">
+                        <ApprovalCard approval={a} />
+                      </div>
+                    ) : null;
+                  })}
                 </div>
               </div>
             ),

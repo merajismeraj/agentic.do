@@ -31,7 +31,6 @@ export function demoState(name = "Alex Rivera", company = "Northstar"): State {
   const picks = ["Chief of Staff", "Inbox Manager", "Sales SDR", "Engineering PM"];
   const hired = picks.map((role) => hire(TEMPLATES.find((t) => t.role === role)!));
   const [ava, iris, rex, theo] = hired.map((h) => h.agent);
-  theo.status = "working";
 
   return {
     onboarded: true,

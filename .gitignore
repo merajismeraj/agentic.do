@@ -5,3 +5,4 @@ next-env.d.ts
 *.tsbuildinfo
 .env*
 .DS_Store
+!.env.example

@@ -59,7 +59,11 @@ export function route(
 }
 
 function pickBest(brains: Brain[], strength: Strength, mode: State["routing"]) {
-  return [...brains].sort((a, b) => score(b) - score(a))[0];
+  return sortByFit(brains, strength, mode)[0];
+}
+
+function sortByFit(brains: Brain[], strength: Strength, mode: State["routing"]) {
+  return [...brains].sort((a, b) => score(b) - score(a));
   function score(b: Brain) {
     const p = providerById(b.providerId);
     const idx = p.strengths.indexOf(strength);
@@ -67,6 +71,19 @@ function pickBest(brains: Brain[], strength: Strength, mode: State["routing"]) {
     const headroom = (100 - b.usage) / 100;
     return mode === "cost" ? fit + headroom * 6 : mode === "quality" ? fit * 3 + headroom : fit * 2 + headroom * 2;
   }
+}
+
+/**
+ * Full failover order for a task: the routed choice first, then every other
+ * enabled brain by fit, with near-limit brains last.
+ */
+export function rank(brains: Brain[], agent: Pick<Agent, "brain">, text: string, mode: State["routing"]): RouteDecision[] {
+  const first = route(brains, agent, text, mode);
+  if (!first) return [];
+  const strength = classify(text);
+  const live = brains.filter((b) => b.enabled && b.providerId !== first.providerId);
+  const rest = [...sortByFit(live.filter((b) => b.usage < LIMIT), strength, mode), ...live.filter((b) => b.usage >= LIMIT)];
+  return [first, ...rest.map((b) => ({ providerId: b.providerId, reason: `Failover for ${strength}` }))];
 }
 
 /* ------------------------------------------------------------------ */

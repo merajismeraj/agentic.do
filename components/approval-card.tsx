@@ -72,6 +72,10 @@ export function ApprovalCard({ approval, compact = false, focused = false }: { a
         </div>
       )}
 
+      {approval.result && (
+        <div className="border-t border-line bg-surface-2/40 px-4 py-2.5 text-[13px] text-fg-2">{approval.result}</div>
+      )}
+
       {!done && (
         <div className="flex items-center gap-2 border-t border-line bg-surface-2/40 px-4 py-2.5">
           <Button variant="primary" size="sm" onClick={() => decide(approval.id, "approved", fields)}>

@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowRight, Plus, Sparkles, Unplug } from "lucide-react";
+import { ArrowRight, KeyRound, Plus, Sparkles, Unplug } from "lucide-react";
 import { useState } from "react";
 import { ConnectBrain } from "@/components/connect";
 import { PageHeader } from "@/components/shell";
@@ -20,7 +20,8 @@ const MODES: { value: State["routing"]; label: string; hint: string }[] = [
 const SAMPLES = ["Draft a reply to Priya about the contract", "Research what competitors launched this week", "Why is the checkout PR failing?"];
 
 export default function BrainsPage() {
-  const { state, update } = useStore();
+  const { state, update, live } = useStore();
+  const liveCount = state.brains.filter((b) => live?.providers[b.providerId]?.live).length;
   const [connecting, setConnecting] = useState<ProviderId | null>(null);
   const connected = new Set(state.brains.map((b) => b.providerId));
   const available = PROVIDERS.filter((p) => !connected.has(p.id));
@@ -31,6 +32,29 @@ export default function BrainsPage() {
         title="AI accounts"
         subtitle="Bring every AI subscription you already pay for. Your team pools them and routes each task to the best one."
       />
+
+      {live && (
+        <Card className={cn("mb-6 flex items-start gap-3 p-4 text-sm", liveCount ? "border-ok/30 bg-ok-soft/40" : "border-warn/30 bg-warn-soft/40")}>
+          <KeyRound size={16} className={cn("mt-0.5 shrink-0", liveCount ? "text-ok" : "text-warn")} />
+          <div className="leading-relaxed">
+            {liveCount ? (
+              <>
+                <span className="font-medium">{liveCount} of {state.brains.length} accounts run live.</span> The rest run in demo mode until an API key is added.
+              </>
+            ) : (
+              <>
+                <span className="font-medium">Teammates are running in demo mode.</span> Chat subscriptions can't be called by other apps, so live runs use each
+                provider's API key.
+              </>
+            )}{" "}
+            Set <code className="rounded bg-surface-2 px-1 font-mono text-xs">ANTHROPIC_API_KEY</code>,{" "}
+            <code className="rounded bg-surface-2 px-1 font-mono text-xs">OPENAI_API_KEY</code>,{" "}
+            <code className="rounded bg-surface-2 px-1 font-mono text-xs">GEMINI_API_KEY</code>,{" "}
+            <code className="rounded bg-surface-2 px-1 font-mono text-xs">XAI_API_KEY</code>… in <code className="rounded bg-surface-2 px-1 font-mono text-xs">.env.local</code> (see{" "}
+            <code className="rounded bg-surface-2 px-1 font-mono text-xs">.env.example</code>).
+          </div>
+        </Card>
+      )}
 
       <Card className="mb-8 overflow-hidden">
         <div className="grid gap-6 p-5 sm:p-6 lg:grid-cols-[1fr_1.1fr]">
@@ -103,7 +127,17 @@ export default function BrainsPage() {
                       ))}
                     </select>
                   </div>
-                  <div className="text-xs text-muted">{p.models.join(" · ")}</div>
+                  <div className="flex items-center gap-1.5 text-xs text-muted">
+                    {live?.providers[p.id]?.live ? (
+                      <>
+                        <Badge tone="ok">Live</Badge> {live.providers[p.id].model}
+                      </>
+                    ) : (
+                      <>
+                        {live && <Badge>Demo</Badge>} {p.models.join(" · ")}
+                      </>
+                    )}
+                  </div>
                 </div>
                 <Switch label="Use in pool" checked={b.enabled} onChange={(v) => set({ enabled: v })} />
               </div>

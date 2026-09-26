@@ -1,9 +1,8 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { plan } from "./engine";
 import { EMPTY } from "./seed";
-import type { Agent, Approval, State } from "./types";
+import type { Agent, Approval, LiveStatus, Message, RunEvent, RunRequest, State } from "./types";
 import { uid } from "./utils";
 
 const KEY = "agentic.do:v1";
@@ -20,6 +19,7 @@ interface Store {
   decide: (approvalId: string, decision: "approved" | "rejected", edited?: Approval["preview"]) => void;
   toast: (text: string) => void;
   toasts: { id: string; text: string }[];
+  live: LiveStatus | null;
 }
 
 const Ctx = createContext<Store | null>(null);
@@ -28,6 +28,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<State>(EMPTY);
   const [ready, setReady] = useState(false);
   const [toasts, setToasts] = useState<{ id: string; text: string }[]>([]);
+  const [live, setLive] = useState<LiveStatus | null>(null);
   const stateRef = useRef(state);
   stateRef.current = state;
 
@@ -37,6 +38,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (raw) setState({ ...EMPTY, ...JSON.parse(raw) });
     } catch {}
     setReady(true);
+    fetch("/api/status")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => j && setLive(j as LiveStatus))
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -54,88 +59,157 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 3200);
   }, []);
 
-  const send = useCallback((agentId: string, text: string) => {
-    const s = stateRef.current;
-    const agent = s.agents.find((a) => a.id === agentId);
-    if (!agent) return;
-    const p = plan(s, agent, text, agentId);
-    const replyId = uid();
-    const now = Date.now();
+  const send = useCallback(
+    (agentId: string, text: string) => {
+      const s = stateRef.current;
+      const agent = s.agents.find((a) => a.id === agentId);
+      if (!agent) return;
+      const replyId = uid();
+      const now = Date.now();
+      const history = s.messages
+        .filter((m) => m.threadId === agentId && m.text)
+        .map((m) => ({ role: m.author === "user" ? ("user" as const) : ("assistant" as const), text: m.text }));
 
-    setState((st) => ({
-      ...st,
-      agents: st.agents.map((a) => (a.id === agentId ? { ...a, status: "working" } : a)),
-      messages: [
-        ...st.messages,
-        { id: uid(), threadId: agentId, author: "user", text, at: now },
-        { id: replyId, threadId: agentId, author: "agent", agentId, text: "", at: now + 1, steps: p.steps },
-      ],
-    }));
-
-    const patchReply = (fn: (m: State["messages"][number]) => State["messages"][number]) =>
-      setState((st) => ({ ...st, messages: st.messages.map((m) => (m.id === replyId ? fn(m) : m)) }));
-
-    // Walk through the steps so the user can watch the agent work.
-    let t = 350;
-    p.steps.forEach((step, i) => {
-      setTimeout(() => {
-        patchReply((m) => ({
-          ...m,
-          steps: m.steps?.map((x, j) => (j < i ? { ...x, state: "done" } : j === i ? { ...x, state: "running" } : x)),
-        }));
-      }, t);
-      t += step.kind === "tool" ? 900 : 650;
-    });
-
-    setTimeout(() => {
-      const approvalId = p.approval ? uid() : undefined;
       setState((st) => ({
         ...st,
-        agents: st.agents.map((a) => (a.id === agentId ? { ...a, status: "idle" } : a)),
-        approvals: p.approval
-          ? [{ ...p.approval, id: approvalId!, status: "pending", at: Date.now() }, ...st.approvals]
-          : st.approvals,
-        activity: [
-          {
-            id: uid(),
-            agentId,
-            text: p.approval ? `Prepared “${p.approval.title}” for approval` : `Completed: ${text.slice(0, 60)}`,
-            toolId: p.steps.find((x) => x.toolId)?.toolId,
-            at: Date.now(),
-          },
-          ...st.activity,
-        ].slice(0, 50),
-        messages: st.messages.map((m) =>
-          m.id === replyId
-            ? { ...m, text: p.finalText, approvalId, steps: m.steps?.map((x) => ({ ...x, state: "done" })) }
-            : m,
-        ),
+        agents: st.agents.map((a) => (a.id === agentId ? { ...a, status: "working" } : a)),
+        messages: [
+          ...st.messages,
+          { id: uid(), threadId: agentId, author: "user", text, at: now },
+          { id: replyId, threadId: agentId, author: "agent", agentId, text: "", at: now + 1, steps: [] },
+        ],
       }));
-      if (p.approval) toast(`${agent.name} needs your approval`);
-    }, t + 300);
-  }, [toast]);
 
-  const decide = useCallback<Store["decide"]>((id, decision, edited) => {
-    const s = stateRef.current;
-    const a = s.approvals.find((x) => x.id === id);
-    if (!a) return;
-    const agent = s.agents.find((x) => x.id === a.agentId) as Agent | undefined;
-    setState((st) => ({
-      ...st,
-      approvals: st.approvals.map((x) => (x.id === id ? { ...x, status: decision, preview: edited ?? x.preview } : x)),
-      activity: [
-        {
-          id: uid(),
-          agentId: a.agentId,
-          toolId: a.toolId,
-          text: decision === "approved" ? `Done: ${a.title}` : `Discarded: ${a.title}`,
-          at: Date.now(),
-        },
-        ...st.activity,
-      ],
-    }));
-    toast(decision === "approved" ? `✓ ${agent?.name ?? "Agent"} is on it` : "Discarded — agent will learn from this");
-  }, [toast]);
+      const patchReply = (fn: (m: Message) => Message) =>
+        setState((st) => ({ ...st, messages: st.messages.map((m) => (m.id === replyId ? fn(m) : m)) }));
+
+      const approvals: Approval[] = [];
+      let finalText = "";
+
+      const onEvent = (e: RunEvent) => {
+        if (e.t === "step") {
+          patchReply((m) => {
+            const steps = m.steps ?? [];
+            const i = steps.findIndex((x) => x.id === e.step.id);
+            // Anything still spinning before a new step has finished.
+            const settled = steps.map((x) => (x.kind !== "think" && x.state === "running" && x.id !== e.step.id ? { ...x, state: "done" as const } : x));
+            return { ...m, steps: i === -1 ? [...settled, e.step] : settled.map((x, j) => (j === i ? e.step : x)) };
+          });
+        } else if (e.t === "approval") {
+          approvals.push(e.approval);
+          setState((st) => ({ ...st, approvals: [e.approval, ...st.approvals] }));
+          patchReply((m) => ({ ...m, approvalId: m.approvalId ?? e.approval.id, approvalIds: [...(m.approvalIds ?? []), e.approval.id] }));
+        } else if (e.t === "text") {
+          finalText = e.text;
+          patchReply((m) => ({ ...m, text: e.text }));
+        } else if (e.t === "done") {
+          patchReply((m) => ({ ...m, mode: e.mode, steps: m.steps?.map((x) => ({ ...x, state: "done" })) }));
+        } else if (e.t === "error") {
+          patchReply((m) => ({ ...m, error: e.message, steps: m.steps?.map((x) => ({ ...x, state: "done" })) }));
+        }
+      };
+
+      const body: RunRequest = {
+        agent,
+        text,
+        threadId: agentId,
+        history,
+        brains: s.brains,
+        routing: s.routing,
+        connected: s.connected,
+        memory: s.memory,
+        user: s.user,
+      };
+
+      (async () => {
+        try {
+          const res = await fetch("/api/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+          if (!res.ok || !res.body) throw new Error(`Run failed (${res.status})`);
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder();
+          let buf = "";
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+            let nl: number;
+            while ((nl = buf.indexOf("\n")) !== -1) {
+              const line = buf.slice(0, nl).trim();
+              buf = buf.slice(nl + 1);
+              if (line) onEvent(JSON.parse(line) as RunEvent);
+            }
+          }
+        } catch (err) {
+          onEvent({ t: "error", message: (err as Error).message });
+        } finally {
+          setState((st) => ({
+            ...st,
+            agents: st.agents.map((a) => (a.id === agentId ? { ...a, status: a.status === "working" ? "idle" : a.status } : a)),
+            activity: [
+              {
+                id: uid(),
+                agentId,
+                text: approvals.length ? `Prepared “${approvals[0].title}” for approval` : `Completed: ${text.slice(0, 60)}`,
+                toolId: approvals[0]?.toolId,
+                at: Date.now(),
+              },
+              ...st.activity,
+            ].slice(0, 50),
+          }));
+          if (approvals.length) toast(`${agent.name} needs your approval`);
+          else if (finalText) toast(`${agent.name} finished`);
+        }
+      })();
+    },
+    [toast],
+  );
+
+  const decide = useCallback<Store["decide"]>(
+    (id, decision, edited) => {
+      const s = stateRef.current;
+      const a = s.approvals.find((x) => x.id === id);
+      if (!a) return;
+      const agent = s.agents.find((x) => x.id === a.agentId) as Agent | undefined;
+      const log = (text: string) =>
+        setState((st) => ({ ...st, activity: [{ id: uid(), agentId: a.agentId, toolId: a.toolId, text, at: Date.now() }, ...st.activity] }));
+
+      setState((st) => ({
+        ...st,
+        approvals: st.approvals.map((x) => (x.id === id ? { ...x, status: decision, preview: edited ?? x.preview } : x)),
+      }));
+
+      if (decision === "rejected") {
+        log(`Discarded: ${a.title}`);
+        toast("Discarded");
+        return;
+      }
+      if (!a.call) {
+        log(`Done: ${a.title}`);
+        toast(`✓ ${agent?.name ?? "Agent"} is on it`);
+        return;
+      }
+
+      // Apply edits made on the card to the tool input, matching fields by label.
+      const input = { ...a.call.input };
+      for (const f of edited ?? []) {
+        const key = Object.keys(input).find((k) => k.toLowerCase() === f.label.toLowerCase() || (f.label === "Message" && k === "text") || (f.label === "Comment" && k === "body"));
+        if (key && typeof input[key] === "string") input[key] = f.value;
+      }
+
+      (async () => {
+        try {
+          const res = await fetch("/api/approve", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tool: a.call!.tool, input }) });
+          const r = (await res.json()) as { ok: boolean; live?: boolean; summary: string };
+          setState((st) => ({ ...st, approvals: st.approvals.map((x) => (x.id === id ? { ...x, result: r.summary } : x)) }));
+          log(r.ok ? r.summary : `Failed: ${r.summary}`);
+          toast(r.ok ? `✓ ${r.summary}` : `Couldn't complete: ${r.summary}`);
+        } catch (err) {
+          toast(`Couldn't complete: ${(err as Error).message}`);
+        }
+      })();
+    },
+    [toast],
+  );
 
   const value = useMemo<Store>(
     () => ({
@@ -148,8 +222,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       decide,
       toast,
       toasts,
+      live,
     }),
-    [state, ready, update, send, decide, toast, toasts],
+    [state, ready, update, send, decide, toast, toasts, live],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

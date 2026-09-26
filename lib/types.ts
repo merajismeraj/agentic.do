@@ -99,6 +99,10 @@ export interface Message {
   at: number;
   steps?: Step[];
   approvalId?: string;
+  approvalIds?: string[];
+  /** "live" when a real model ran; "demo" when simulated */
+  mode?: "live" | "demo";
+  error?: string;
 }
 
 export interface Approval {
@@ -111,6 +115,9 @@ export interface Approval {
   preview: { label: string; value: string }[];
   status: "pending" | "approved" | "rejected";
   at: number;
+  /** The tool call to execute once approved (live runs only). */
+  call?: { tool: string; input: Record<string, unknown> };
+  result?: string;
 }
 
 export interface Activity {
@@ -147,4 +154,28 @@ export interface State {
   approvals: Approval[];
   activity: Activity[];
   memory: MemoryFact[];
+}
+
+export interface RunRequest {
+  agent: Agent;
+  text: string;
+  threadId: string;
+  history: { role: "user" | "assistant"; text: string }[];
+  brains: Brain[];
+  routing: State["routing"];
+  connected: string[];
+  memory: MemoryFact[];
+  user: User;
+}
+
+export type RunEvent =
+  | { t: "step"; step: Step }
+  | { t: "text"; text: string }
+  | { t: "approval"; approval: Approval }
+  | { t: "done"; mode: "live" | "demo" }
+  | { t: "error"; message: string };
+
+export interface LiveStatus {
+  providers: Record<ProviderId, { live: boolean; model: string }>;
+  tools: Record<string, boolean>;
 }
