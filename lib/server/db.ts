@@ -79,6 +79,24 @@ create table if not exists activity (
 );
 create index if not exists activity_ws on activity(workspace_id, created_at desc);
 
+alter table messages add column if not exists trigger jsonb;
+
+create table if not exists routine_runs (
+  id text primary key,
+  workspace_id text not null references workspaces(id) on delete cascade,
+  routine_id text not null,
+  scheduled_for timestamptz not null,
+  manual boolean not null default false,
+  status text not null default 'running',
+  message_id text,
+  error text,
+  needs_approval boolean not null default false,
+  started_at timestamptz not null default now(),
+  finished_at timestamptz,
+  unique (workspace_id, routine_id, scheduled_for)   -- one run per occurrence, however many schedulers tick
+);
+create index if not exists routine_runs_ws on routine_runs(workspace_id, started_at desc);
+
 create table if not exists connections (
   workspace_id text not null references workspaces(id) on delete cascade,
   provider text not null,

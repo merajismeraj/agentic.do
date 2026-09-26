@@ -1,10 +1,11 @@
 "use client";
 
-import { ArrowRight, CheckCircle2, Clock, Gauge, Sparkles } from "lucide-react";
+import { AlertCircle, ArrowRight, CheckCircle2, Clock, Gauge, Hand, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ApprovalCard } from "@/components/approval-card";
 import { Composer } from "@/components/composer";
+import { lastRunOf } from "@/components/routine-row";
 import { AgentAvatar, Card, Meter, ProviderLogo, ToolLogo } from "@/components/ui";
 import { providerById } from "@/lib/catalog";
 import { useStore } from "@/lib/store";
@@ -106,6 +107,9 @@ export default function Home() {
                 today.map((r) => {
                   const agent = state.agents.find((a) => a.id === r.agentId);
                   const past = r.nextRunMinute < nowMin;
+                  // Only claim a routine ran if it actually did today.
+                  const last = lastRunOf(state.routineRuns, r.id);
+                  const ranToday = last && (last.finishedAt ?? last.scheduledFor) >= Date.now() - nowMin * 60_000 ? last : undefined;
                   return (
                     <Link
                       key={r.id}
@@ -115,7 +119,13 @@ export default function Home() {
                       <span className="w-11 font-mono text-xs text-muted tabular-nums">{clock(r.nextRunMinute)}</span>
                       {agent && <AgentAvatar agent={agent} size={22} />}
                       <span className="min-w-0 flex-1 truncate text-sm">{r.title}</span>
-                      {past && <CheckCircle2 size={14} className="text-ok" />}
+                      {ranToday?.status === "failed" ? (
+                        <AlertCircle size={14} className="text-danger" aria-label="Failed" />
+                      ) : ranToday?.needsApproval ? (
+                        <Hand size={14} className="text-warn" aria-label="Waiting for approval" />
+                      ) : ranToday ? (
+                        <CheckCircle2 size={14} className="text-ok" aria-label="Done" />
+                      ) : null}
                     </Link>
                   );
                 })

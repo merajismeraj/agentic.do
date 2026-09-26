@@ -1,8 +1,8 @@
 import { currentUser, errorResponse, HttpError, sameOrigin } from "@/lib/server/auth";
-import { googleAuthFor } from "@/lib/server/google";
-import { execute, simulate } from "@/lib/server/run";
-import { finishMessage, insertApproval, insertMessage, logActivity, requireWorkspace, safeId, threadHistory } from "@/lib/server/workspace";
-import type { Approval, RunEvent, RunRequest, Step } from "@/lib/types";
+import { simulate } from "@/lib/server/run";
+import { routinePrompt, runTeammate } from "@/lib/server/runner";
+import { claimRoutineRun, finishRoutineRun, requireWorkspace, safeId } from "@/lib/server/workspace";
+import type { RunEvent, RunRequest } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -35,13 +35,13 @@ function streamOf(work: (emit: (e: RunEvent) => void) => Promise<void>) {
 
 /**
  * Signed in: runs a teammate from the stored workspace (the browser only sends
- * which teammate and what to do) and persists the conversation and approvals.
- * Signed out: the no-account demo, which is always simulated.
+ * which teammate and what to do, or which routine to run now) and persists the
+ * conversation and approvals. Signed out: the no-account demo, always simulated.
  */
 export async function POST(req: Request) {
   try {
     if (!sameOrigin(req)) throw new HttpError(403, "Cross-site request blocked");
-    const body = (await req.json()) as { agentId?: string; text?: string; messageId?: string; replyId?: string; demo?: RunRequest };
+    const body = (await req.json()) as { agentId?: string; text?: string; routineId?: string; messageId?: string; replyId?: string; demo?: RunRequest };
     const user = await currentUser(req);
 
     if (!user) {
@@ -51,73 +51,30 @@ export async function POST(req: Request) {
     }
 
     const ws = await requireWorkspace(user.id);
-    const text = (body.text ?? "").trim().slice(0, 8000);
-    const agent = ws.doc.agents.find((a) => a.id === body.agentId);
+    const routine = body.routineId ? ws.doc.routines.find((r) => r.id === body.routineId) : undefined;
+    if (body.routineId && !routine) throw new HttpError(404, "Routine not found");
+    const agent = ws.doc.agents.find((a) => a.id === (routine?.agentId ?? body.agentId));
     if (!agent) throw new HttpError(404, "Teammate not found");
-    if (!text) throw new HttpError(400, "Say what you need");
     if (agent.status === "paused") throw new HttpError(409, `${agent.name} is paused`);
+    const text = routine ? routine.title : (body.text ?? "").trim().slice(0, 8000);
+    if (!text) throw new HttpError(400, "Say what you need");
 
-    const history = await threadHistory(ws.id, agent.id);
-    const now = Date.now();
-    const userMsgId = safeId(body.messageId);
-    const replyId = safeId(body.replyId);
-    await insertMessage(ws.id, { id: userMsgId, threadId: agent.id, author: "user", text, at: now });
-    await insertMessage(ws.id, { id: replyId, threadId: agent.id, author: "agent", agentId: agent.id, text: "", at: now + 1, steps: [] });
-
-    const request: RunRequest = {
-      agent,
-      text,
-      threadId: agent.id,
-      history,
-      brains: ws.doc.brains,
-      routing: ws.doc.routing,
-      connected: ws.doc.connected,
-      memory: ws.doc.memory,
-      user: ws.doc.user,
-    };
-    const ctx = { google: await googleAuthFor(ws.id), timeZone: ws.doc.user.timezone || "UTC" };
+    const trigger = routine ? { routineId: routine.id, title: routine.title, scheduled: false } : undefined;
+    const runId = routine ? await claimRoutineRun(ws.id, routine.id, Date.now(), true) : null;
 
     return new Response(
       streamOf(async (emit) => {
-        const steps: Step[] = [];
-        const approvals: Approval[] = [];
-        let finalText = "";
-        let mode: "live" | "demo" | undefined;
-        let error: string | undefined;
-
-        const record = async (e: RunEvent) => {
-          if (e.t === "step") {
-            const i = steps.findIndex((s) => s.id === e.step.id);
-            if (i === -1) steps.push(e.step);
-            else steps[i] = e.step;
-          } else if (e.t === "approval") {
-            approvals.push(e.approval);
-            await insertApproval(ws.id, e.approval);
-          } else if (e.t === "text") finalText = e.text;
-          else if (e.t === "done") mode = e.mode;
-          else if (e.t === "error") error = e.message;
-          emit(e);
-        };
-
-        // Record events strictly in order; approvals are persisted before the browser hears about them.
-        let chain = Promise.resolve();
-        try {
-          await execute(request, (e) => void (chain = chain.then(() => record(e))), ctx);
-        } finally {
-          await chain;
-          await finishMessage(ws.id, replyId, {
-            text: finalText,
-            steps: steps.map((s) => ({ ...s, state: "done" as const })),
-            approvalIds: approvals.map((a) => a.id),
-            mode,
-            error,
-          });
-          await logActivity(ws.id, {
-            agentId: agent.id,
-            toolId: approvals[0]?.toolId,
-            text: approvals.length ? `Prepared “${approvals[0].title}” for approval` : error ? `Couldn't finish: ${text.slice(0, 50)}` : `Completed: ${text.slice(0, 60)}`,
-          });
-        }
+        const r = await runTeammate({
+          ws,
+          agent,
+          prompt: routine ? routinePrompt(routine.title, false) : text,
+          userMessage: { id: safeId(body.messageId), text: routine ? `Run “${routine.title}” now` : text },
+          replyId: safeId(body.replyId),
+          trigger,
+          emit,
+        });
+        if (runId)
+          await finishRoutineRun(ws.id, runId, { status: r.error ? "failed" : "done", messageId: r.replyId, error: r.error, needsApproval: r.approvals.length > 0 });
       }),
       { headers: NDJSON },
     );

@@ -4,8 +4,9 @@ import { CalendarClock, Plus } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { RoutineForm } from "@/components/routine-form";
+import { RoutineRow } from "@/components/routine-row";
 import { PageHeader } from "@/components/shell";
-import { AgentAvatar, Button, Card, Empty, Modal, Switch } from "@/components/ui";
+import { AgentAvatar, Button, Card, Empty, Modal } from "@/components/ui";
 import { useStore } from "@/lib/store";
 import { clock, cn } from "@/lib/utils";
 
@@ -13,7 +14,7 @@ const START = 7 * 60;
 const END = 20 * 60;
 
 export default function SchedulePage() {
-  const { state, update } = useStore();
+  const { state, mode } = useStore();
   const [adding, setAdding] = useState(false);
   const [now, setNow] = useState<number | null>(null);
 
@@ -34,7 +35,7 @@ export default function SchedulePage() {
     <div>
       <PageHeader
         title="Routines"
-        subtitle="Recurring work your team does on schedule — while you're in meetings, asleep, or on holiday."
+        subtitle={mode === "demo" ? "Recurring work your team does on schedule. In the demo, use Run now to see one." : "Recurring work your team does on schedule — while you're in meetings, asleep, or on holiday."}
         actions={
           <Button variant="primary" onClick={() => setAdding(true)} disabled={!state.agents.length}>
             <Plus size={16} /> New routine
@@ -64,19 +65,29 @@ export default function SchedulePage() {
                   </span>
                 )}
                 {state.agents.map((a) => {
-                  const rs = state.routines.filter((r) => r.agentId === a.id && r.enabled);
+                  const rs = state.routines.filter((r) => r.agentId === a.id && r.enabled).sort((x, y) => x.nextRunMinute - y.nextRunMinute);
                   if (!rs.length) return null;
+                  // Stack routines that would overlap onto separate lanes (a pill spans roughly 2.5 hours of track).
+                  const laneEnds: number[] = [];
+                  const lane = new Map<string, number>();
+                  for (const r of rs) {
+                    let i = laneEnds.findIndex((end) => end <= r.nextRunMinute);
+                    if (i === -1) i = laneEnds.push(0) - 1;
+                    laneEnds[i] = r.nextRunMinute + 150;
+                    lane.set(r.id, i);
+                  }
                   return (
-                    <div key={a.id} className="relative h-9">
+                    <div key={a.id} className="relative" style={{ height: laneEnds.length * 42 - 6 }}>
                       {rs.map((r) => (
                         <Link
                           key={r.id}
                           href={`/app/agents/${a.id}`}
                           className={cn(
-                            "absolute top-0 flex h-9 max-w-52 items-center gap-1.5 rounded-lg border px-1.5 pr-2.5 text-xs font-medium whitespace-nowrap shadow-sm transition-transform hover:z-20 hover:scale-[1.03]",
+                            "absolute flex h-9 max-w-52 items-center gap-1.5 rounded-lg border px-1.5 pr-2.5 text-xs font-medium whitespace-nowrap shadow-sm transition-transform hover:z-20 hover:scale-[1.03]",
                             now !== null && r.nextRunMinute < now && "opacity-50",
                           )}
                           style={{
+                            top: (lane.get(r.id) ?? 0) * 42,
                             left: pct(r.nextRunMinute),
                             background: `color-mix(in srgb, ${a.color} 10%, var(--surface))`,
                             borderColor: `color-mix(in srgb, ${a.color} 30%, transparent)`,
@@ -95,27 +106,9 @@ export default function SchedulePage() {
           </Card>
 
           <Card className="divide-y divide-line">
-            {state.routines.map((r) => {
-              const a = state.agents.find((x) => x.id === r.agentId);
-              return (
-                <div key={r.id} className="flex items-center gap-4 px-4 py-3.5">
-                  {a && <AgentAvatar agent={a} size={30} />}
-                  <div className="min-w-0 flex-1">
-                    <div className={cn("text-sm font-medium", !r.enabled && "text-muted")}>{r.title}</div>
-                    <div className="text-xs text-muted">
-                      {a?.name} · {r.cadence}
-                      {r.lastResult && ` · ${r.lastResult}`}
-                    </div>
-                  </div>
-                  <span className="hidden font-mono text-xs text-muted tabular-nums sm:block">next {clock(r.nextRunMinute)}</span>
-                  <Switch
-                    label="Enabled"
-                    checked={r.enabled}
-                    onChange={(v) => update((s) => ({ ...s, routines: s.routines.map((x) => (x.id === r.id ? { ...x, enabled: v } : x)) }))}
-                  />
-                </div>
-              );
-            })}
+            {state.routines.map((r) => (
+              <RoutineRow key={r.id} routine={r} showAgent />
+            ))}
           </Card>
         </>
       ) : (

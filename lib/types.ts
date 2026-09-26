@@ -1,3 +1,5 @@
+import type { Schedule } from "./schedule";
+
 export type ProviderId =
   | "chatgpt"
   | "claude"
@@ -71,7 +73,11 @@ export interface Routine {
   id: string;
   agentId: string;
   title: string;
+  /** Human-readable schedule; `schedule` is the machine form (derived from this when absent). */
   cadence: string;
+  schedule?: Schedule;
+  /** Occurrences before this are never run (so a new 8:00 routine created at 8:30 waits for tomorrow). */
+  createdAt?: number;
   /** minutes after midnight for the next run, used to lay out today's timeline */
   nextRunMinute: number;
   enabled: boolean;
@@ -103,6 +109,20 @@ export interface Message {
   /** "live" when a real model ran; "demo" when simulated */
   mode?: "live" | "demo";
   error?: string;
+  /** Set when a routine (scheduled or "Run now") produced this message. */
+  trigger?: { routineId: string; title: string; scheduled: boolean };
+}
+
+export interface RoutineRun {
+  id: string;
+  routineId: string;
+  scheduledFor: number;
+  status: "running" | "done" | "failed";
+  manual: boolean;
+  finishedAt?: number;
+  error?: string;
+  messageId?: string;
+  needsApproval?: boolean;
 }
 
 export interface Approval {
@@ -154,6 +174,7 @@ export interface State {
   approvals: Approval[];
   activity: Activity[];
   memory: MemoryFact[];
+  routineRuns?: RoutineRun[];
 }
 
 export interface RunRequest {

@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --conditions=react-server tests/api.test.mts"
+    "test": "tsx tests/schedule.test.mts && tsx --conditions=react-server tests/api.test.mts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.128.0",

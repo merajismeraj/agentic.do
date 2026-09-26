@@ -403,5 +403,94 @@ assert.equal((await meOf(bobG)).user.email, "bob@other.com");
 assert.equal((await meOf(bobG)).workspace.doc.agents[0].name, "Rex", "verified email links to the existing account");
 ok("Sign in with Google: identity-only scopes, stable accounts, linking only via verified email");
 
+/* ---------------------------- scheduler ------------------------------ */
+
+const scheduler = await route("lib/server/scheduler.ts");
+const cron = await route("app/api/cron/tick/route.ts");
+chatScript = () => ({ role: "assistant", content: "Brief: three meetings, nothing urgent." });
+
+// Rex gets routines: weekdays 08:00 in Kolkata (02:30Z), a disabled twin, a trigger routine, and one created after today's occurrence.
+const MON_0810_IST = Date.parse("2026-09-28T02:40:00Z");
+let cur = await meOf(alex);
+const routines = [
+  { id: "r-brief", agentId: "rex", title: "Morning brief", cadence: "Weekdays · 08:00", schedule: { kind: "weekdays", time: "08:00" }, createdAt: 0, nextRunMinute: 480, enabled: true },
+  { id: "r-off", agentId: "rex", title: "Disabled twin", cadence: "Weekdays · 08:00", schedule: { kind: "weekdays", time: "08:00" }, createdAt: 0, nextRunMinute: 480, enabled: false },
+  { id: "r-trig", agentId: "rex", title: "New lead", cadence: "When a lead arrives", createdAt: 0, nextRunMinute: 540, enabled: true },
+  { id: "r-new", agentId: "rex", title: "Too new", cadence: "Weekdays · 08:00", schedule: { kind: "weekdays", time: "08:00" }, createdAt: MON_0810_IST - 60_000, nextRunMinute: 480, enabled: true },
+];
+res = await workspace.PUT(alex.req("/api/workspace", { method: "PUT", body: { doc: { ...cur.workspace.doc, routines }, baseVersion: cur.workspace.version } }));
+assert.equal(res.status, 200);
+
+const [a, b] = await Promise.all([scheduler.tick({ now: MON_0810_IST }), scheduler.tick({ now: MON_0810_IST })]);
+assert.equal(a.started + b.started, 1, "two concurrent ticks run the occurrence exactly once");
+assert.equal(a.done + b.done, 1);
+assert.equal((await scheduler.tick({ now: MON_0810_IST + 5 * 60_000 })).started, 0, "a later tick doesn't re-run it");
+cur = await meOf(alex);
+const runs = cur.routineRuns.filter((r: Any) => r.routineId === "r-brief");
+assert.equal(runs.length, 1);
+assert.equal(runs[0].status, "done");
+assert.equal(runs[0].manual, false);
+assert.equal(new Date(runs[0].scheduledFor).toISOString(), "2026-09-28T02:30:00.000Z", "08:00 in Asia/Kolkata");
+assert.ok(!cur.routineRuns.some((r: Any) => ["r-off", "r-trig", "r-new"].includes(r.routineId)), "disabled, trigger and too-new routines don't run");
+const scheduledMsg = cur.messages.find((m: Any) => m.id === runs[0].messageId);
+assert.deepEqual(scheduledMsg.trigger, { routineId: "r-brief", title: "Morning brief", scheduled: true });
+assert.equal(scheduledMsg.text, "Brief: three meetings, nothing urgent.");
+assert.ok(!cur.messages.some((m: Any) => m.author === "user" && m.trigger?.scheduled), "scheduled runs don't fake a user message");
+assert.match(cur.activity[0].text, /Ran “Morning brief” on schedule/);
+ok("scheduler runs a due routine exactly once, in the user's timezone, and records it");
+
+// Tuesday 11:40 IST: 08:00 was 3h40m ago, beyond the catch-up window, so it's skipped rather than run late.
+assert.equal((await scheduler.tick({ now: Date.parse("2026-09-29T06:10:00Z") })).started, 0);
+// Paused teammate: nothing runs.
+cur = await meOf(alex);
+await workspace.PUT(alex.req("/api/workspace", {
+  method: "PUT",
+  body: { doc: { ...cur.workspace.doc, agents: cur.workspace.doc.agents.map((x: Any) => ({ ...x, status: "paused" })) }, baseVersion: cur.workspace.version },
+}));
+assert.equal((await scheduler.tick({ now: Date.parse("2026-09-30T02:35:00Z") })).started, 0, "paused teammates don't run");
+cur = await meOf(alex);
+await workspace.PUT(alex.req("/api/workspace", {
+  method: "PUT",
+  body: { doc: { ...cur.workspace.doc, agents: cur.workspace.doc.agents.map((x: Any) => ({ ...x, status: "idle" })) }, baseVersion: cur.workspace.version },
+}));
+ok("missed runs outside the 90-minute window are skipped; paused teammates never run");
+
+// No live AI provider: a scheduled run fails with a reason instead of writing simulated results into the real workspace.
+delete process.env.OPENAI_API_KEY;
+const WED = Date.parse("2026-09-30T02:40:00Z");
+// Both 08:00 routines are due on Wednesday ("Too new" was only too new on Monday).
+const wed = await scheduler.tick({ now: WED });
+assert.equal(wed.started, 2);
+assert.equal(wed.failed, 2);
+cur = await meOf(alex);
+const failedRun = cur.routineRuns.find((r: Any) => r.routineId === "r-brief" && r.status === "failed");
+assert.match(failedRun.error, /API key/);
+const failedMsg = cur.messages.find((m: Any) => m.id === failedRun.messageId);
+assert.equal(failedMsg.text, "", "nothing fabricated");
+assert.ok(cur.activity.slice(0, 2).some((x: Any) => /Couldn't finish “Morning brief”/.test(x.text)));
+assert.ok(cur.routineRuns.some((r: Any) => r.routineId === "r-new" && r.status === "failed"), "created-Monday routine runs from Wednesday");
+process.env.OPENAI_API_KEY = "test-key";
+ok("scheduled runs never fall back to sample data; without a live AI they fail with a clear reason");
+
+delete process.env.CRON_SECRET;
+assert.equal((await cron.GET(new Request("http://app.test/api/cron/tick"))).status, 503, "no secret, no scheduler endpoint");
+process.env.CRON_SECRET = "s3cret-value";
+assert.equal((await cron.GET(new Request("http://app.test/api/cron/tick", { headers: { authorization: "Bearer nope" } }))).status, 401);
+res = await cron.GET(new Request("http://app.test/api/cron/tick", { headers: { authorization: "Bearer s3cret-value" } }));
+assert.equal(res.status, 200);
+assert.ok("started" in (await res.json()));
+ok("cron endpoint requires CRON_SECRET");
+
+const evRun = await readStream(await run.POST(alex.req("/api/run", { method: "POST", body: { routineId: "r-trig", messageId: "runNowMsg1", replyId: "runNowRep1" } })));
+assert.equal(evRun.at(-1).t, "done");
+cur = await meOf(alex);
+const manual = cur.routineRuns.find((r: Any) => r.routineId === "r-trig");
+assert.equal(manual.manual, true);
+assert.equal(manual.messageId, "runNowRep1");
+assert.equal(cur.messages.find((m: Any) => m.id === "runNowMsg1").text, "Run “New lead” now");
+assert.equal(cur.messages.find((m: Any) => m.id === "runNowRep1").trigger.scheduled, false);
+assert.equal((await run.POST(alex.req("/api/run", { method: "POST", body: { routineId: "missing" } }))).status, 404);
+ok("Run now runs any routine on demand (including trigger routines) and records it");
+
 console.log("\nALL API TESTS PASSED");
 process.exit(0);

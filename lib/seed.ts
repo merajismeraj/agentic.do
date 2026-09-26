@@ -1,5 +1,6 @@
 import { TEMPLATES, type AgentTemplate } from "./catalog";
 import type { Agent, Routine, State } from "./types";
+import { parseCadence } from "./schedule";
 import { uid } from "./utils";
 
 const H = 3600_000;
@@ -21,7 +22,7 @@ export const EMPTY: State = {
 export function hire(t: AgentTemplate, overrides: Partial<Agent> = {}): { agent: Agent; routines: Routine[] } {
   const { pitch: _p, routines: rs, ...rest } = t;
   const agent: Agent = { ...rest, id: uid(), status: "idle", hiredAt: Date.now(), ...overrides };
-  const routines = rs.map((r) => ({ ...r, id: uid(), agentId: agent.id, enabled: true }));
+  const routines = rs.map((r) => ({ ...r, id: uid(), agentId: agent.id, enabled: true, schedule: parseCadence(r.cadence), createdAt: Date.now() }));
   return { agent, routines };
 }
 
@@ -44,7 +45,15 @@ export function demoState(name = "Alex Rivera", company = "Northstar"): State {
     routing: "auto",
     connected: ["gmail", "gcal", "slack", "notion", "github", "linear", "hubspot"],
     agents: hired.map((h) => h.agent),
-    routines: hired.flatMap((h) => h.routines).map((r, i) => (i === 0 ? { ...r, lastResult: "Brief sent · 6 items" } : r)),
+    routines: hired.flatMap((h) => h.routines),
+    routineRuns: hired[0].routines.slice(0, 1).map((r) => ({
+      id: uid(),
+      routineId: r.id,
+      scheduledFor: now - 2 * H,
+      finishedAt: now - 2 * H + 40_000,
+      status: "done" as const,
+      manual: false,
+    })),
     messages: [
       {
         id: uid(),

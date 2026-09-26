@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { demoState, EMPTY } from "./seed";
-import type { Activity, Agent, Approval, LiveStatus, Message, RunEvent, RunRequest, State } from "./types";
+import type { Activity, Agent, Approval, LiveStatus, Message, RoutineRun, RunEvent, RunRequest, State } from "./types";
 import { uid } from "./utils";
 
 /**
@@ -37,6 +37,8 @@ interface Store {
   reload: () => Promise<Mode>;
   signOut: () => Promise<void>;
   send: (agentId: string, text: string) => void;
+  /** Runs a routine immediately in its teammate's chat. */
+  runRoutine: (routineId: string) => void;
   decide: (approvalId: string, decision: "approved" | "rejected", edited?: Approval["preview"]) => void;
   toast: (text: string) => void;
   toasts: { id: string; text: string }[];
@@ -99,12 +101,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           messages?: Message[];
           approvals?: Approval[];
           activity?: Activity[];
+          routineRuns?: RoutineRun[];
         };
         setAccount(me.user);
         version.current = me.workspace?.version ?? null;
         setState(
           me.workspace
-            ? { ...EMPTY, ...me.workspace.doc, onboarded: true, messages: me.messages ?? [], approvals: me.approvals ?? [], activity: me.activity ?? [] }
+            ? {
+                ...EMPTY,
+                ...me.workspace.doc,
+                onboarded: true,
+                messages: me.messages ?? [],
+                approvals: me.approvals ?? [],
+                activity: me.activity ?? [],
+                routineRuns: me.routineRuns ?? [],
+              }
             : { ...EMPTY, user: { ...EMPTY.user, name: me.user.name } },
         );
         setMode("account");
@@ -250,11 +261,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   /* ------------------------------ Runs ------------------------------ */
 
-  const send = useCallback(
-    (agentId: string, text: string) => {
+  const start = useCallback(
+    (agentId: string, text: string, routineId?: string) => {
       const s = stateRef.current;
       const agent = s.agents.find((a) => a.id === agentId);
       if (!agent) return;
+      const routine = routineId ? s.routines.find((r) => r.id === routineId) : undefined;
+      const trigger = routine ? { routineId: routine.id, title: routine.title, scheduled: false } : undefined;
+      const runStartedAt = Date.now();
       const userId = uid();
       const replyId = uid();
       const now = Date.now();
@@ -265,8 +279,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         agents: st.agents.map((a) => (a.id === agentId ? { ...a, status: "working" } : a)),
         messages: [
           ...st.messages,
-          { id: userId, threadId: agentId, author: "user", text, at: now },
-          { id: replyId, threadId: agentId, author: "agent", agentId, text: "", at: now + 1, steps: [] },
+          { id: userId, threadId: agentId, author: "user", text: routine ? `Run “${routine.title}” now` : text, at: now, trigger },
+          { id: replyId, threadId: agentId, author: "agent", agentId, text: "", at: now + 1, steps: [], trigger },
         ],
       }));
 
@@ -323,7 +337,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const res = await fetch("/api/run", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(demo ? { demo } : { agentId, text, messageId: userId, replyId }),
+            body: JSON.stringify(demo ? { demo } : routine ? { routineId: routine.id, messageId: userId, replyId } : { agentId, text, messageId: userId, replyId }),
           });
           if (!res.ok || !res.body) {
             const err = (await res.json().catch(() => ({}))) as { error?: string };
@@ -360,12 +374,34 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               ...st.activity,
             ].slice(0, 50),
           }));
+          if (routine) {
+            const run: RoutineRun = {
+              id: uid(),
+              routineId: routine.id,
+              scheduledFor: runStartedAt,
+              status: failed ? "failed" : "done",
+              manual: true,
+              finishedAt: Date.now(),
+              messageId: replyId,
+              needsApproval: approvals.length > 0,
+            };
+            setState((st) => ({ ...st, routineRuns: [run, ...(st.routineRuns ?? [])] }));
+          }
           if (approvals.length) toast(`${agent.name} needs your approval`);
           else if (finalText && !failed) toast(`${agent.name} finished`);
         }
       })();
     },
     [toast],
+  );
+
+  const send = useCallback((agentId: string, text: string) => start(agentId, text), [start]);
+  const runRoutine = useCallback(
+    (routineId: string) => {
+      const r = stateRef.current.routines.find((x) => x.id === routineId);
+      if (r) start(r.agentId, r.title, r.id);
+    },
+    [start],
   );
 
   /* ------------------------------ Approvals ------------------------- */
@@ -430,13 +466,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       reload,
       signOut,
       send,
+      runRoutine,
       decide,
       toast,
       toasts,
       live,
       refreshLive,
     }),
-    [state, mode, account, sync, update, startDemo, finishOnboarding, reload, signOut, send, decide, toast, toasts, live, refreshLive],
+    [state, mode, account, sync, update, startDemo, finishOnboarding, reload, signOut, send, runRoutine, decide, toast, toasts, live, refreshLive],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

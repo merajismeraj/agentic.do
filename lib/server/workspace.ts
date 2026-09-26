@@ -1,5 +1,5 @@
 import "server-only";
-import type { Activity, Approval, Message, State } from "../types";
+import type { Activity, Approval, Message, RoutineRun, State } from "../types";
 import { HttpError, newId } from "./auth";
 import { db, type Db } from "./db";
 import { seal, unseal } from "./seal";
@@ -80,6 +80,7 @@ interface MessageRow {
   approval_ids: string[] | null;
   mode: Message["mode"] | null;
   error: string | null;
+  trigger: Message["trigger"] | null;
   created_at: Date;
 }
 
@@ -95,12 +96,13 @@ const toMessage = (r: MessageRow): Message => ({
   approvalId: r.approval_ids?.[0],
   mode: r.mode ?? undefined,
   error: r.error ?? undefined,
+  trigger: r.trigger ?? undefined,
 });
 
 export async function insertMessage(workspaceId: string, m: Message, conn?: Db) {
   await (conn ?? (await db())).query(
-    `insert into messages (id, workspace_id, thread_id, author, agent_id, text, steps, approval_ids, mode, error, created_at)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+    `insert into messages (id, workspace_id, thread_id, author, agent_id, text, steps, approval_ids, mode, error, created_at, trigger)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
     [
       m.id,
       workspaceId,
@@ -113,6 +115,7 @@ export async function insertMessage(workspaceId: string, m: Message, conn?: Db) 
       m.mode ?? null,
       m.error ?? null,
       new Date(m.at),
+      m.trigger ? JSON.stringify(m.trigger) : null,
     ],
   );
 }
@@ -251,4 +254,72 @@ export async function setConnection(workspaceId: string, provider: string, accou
 
 export async function deleteConnection(workspaceId: string, provider: string) {
   await (await db()).query("delete from connections where workspace_id = $1 and provider = $2", [workspaceId, provider]);
+}
+
+/* ------------------------------ Routine runs ----------------------- */
+
+/**
+ * Claims one occurrence of a routine. The unique (workspace, routine,
+ * scheduled_for) key makes this the idempotency point: concurrent schedulers
+ * race here and exactly one wins.
+ */
+export async function claimRoutineRun(workspaceId: string, routineId: string, scheduledFor: number, manual: boolean) {
+  const { rows } = await (await db()).query<{ id: string }>(
+    `insert into routine_runs (id, workspace_id, routine_id, scheduled_for, manual) values ($1,$2,$3,$4,$5)
+     on conflict (workspace_id, routine_id, scheduled_for) do nothing returning id`,
+    [newId(), workspaceId, routineId, new Date(scheduledFor), manual],
+  );
+  return rows[0]?.id ?? null;
+}
+
+export async function finishRoutineRun(workspaceId: string, id: string, r: { status: "done" | "failed"; messageId?: string; error?: string; needsApproval?: boolean }) {
+  await (await db()).query(
+    "update routine_runs set status = $3, message_id = $4, error = $5, needs_approval = $6, finished_at = now() where workspace_id = $1 and id = $2",
+    [workspaceId, id, r.status, r.messageId ?? null, r.error ?? null, r.needsApproval ?? false],
+  );
+}
+
+/** Runs orphaned by a crashed or timed-out worker are marked failed so they don't look stuck forever. */
+export async function failStaleRuns(olderThanMinutes = 15) {
+  await (await db()).query(
+    `update routine_runs set status = 'failed', error = 'Interrupted before finishing', finished_at = now()
+     where status = 'running' and started_at < now() - ($1::int * interval '1 minute')`,
+    [olderThanMinutes],
+  );
+}
+
+export async function listRoutineRuns(workspaceId: string, limit = 100): Promise<RoutineRun[]> {
+  const { rows } = await (await db()).query<{
+    id: string;
+    routine_id: string;
+    scheduled_for: Date;
+    status: RoutineRun["status"];
+    manual: boolean;
+    finished_at: Date | null;
+    error: string | null;
+    message_id: string | null;
+    needs_approval: boolean;
+  }>("select * from routine_runs where workspace_id = $1 order by started_at desc limit $2", [workspaceId, limit]);
+  return rows.map((r) => ({
+    id: r.id,
+    routineId: r.routine_id,
+    scheduledFor: new Date(r.scheduled_for).getTime(),
+    status: r.status,
+    manual: r.manual,
+    finishedAt: r.finished_at ? new Date(r.finished_at).getTime() : undefined,
+    error: r.error ?? undefined,
+    messageId: r.message_id ?? undefined,
+    needsApproval: r.needs_approval,
+  }));
+}
+
+/** Every workspace, for the scheduler. Pages through in batches to bound memory. */
+export async function* allWorkspaces(batch = 200): AsyncGenerator<Workspace> {
+  let after = "";
+  for (;;) {
+    const { rows } = await (await db()).query<Workspace>("select id, doc, version from workspaces where id > $1 order by id limit $2", [after, batch]);
+    if (!rows.length) return;
+    for (const r of rows) yield r;
+    after = rows[rows.length - 1].id;
+  }
 }

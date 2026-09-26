@@ -6,7 +6,7 @@ AI teammates that connect to your tools, understand your context, and get work d
 npm install
 cp .env.example .env.local   # set SESSION_SECRET at minimum
 npm run dev                  # http://localhost:3000
-npm test                     # API + auth + Google suite (in-memory Postgres, mocked vendors)
+npm test                     # schedule + API suites (in-memory Postgres, mocked vendors)
 ```
 
 **Get started** creates an account and runs the 2‑minute onboarding. **Explore live demo** opens a sample workspace with no account: it lives in the browser and is always simulated.
@@ -48,8 +48,11 @@ Global: `⌘K` command palette (navigate or delegate in one line), light/dark th
 - `lib/server/run.ts` — run orchestrator: routing, failover, tool loop, approval gate, NDJSON events
 - `lib/server/providers.ts` — Anthropic SDK adapter + OpenAI-compatible adapter (OpenAI, Gemini, xAI, Mistral, DeepSeek, Perplexity)
 - `lib/server/tools.ts` — tool registry; live connectors for Slack, GitHub and Linear, demo data for the rest
+- `lib/schedule.ts` — routine schedules, next/previous occurrence in the user's timezone (DST-safe)
+- `lib/server/runner.ts` — one persisted teammate run, shared by chat, Run now and the scheduler
+- `lib/server/scheduler.ts` — finds due routines, claims each occurrence once, runs them; `instrumentation.ts` + `api/cron/tick` drive it
 - `lib/server/google.ts` + `lib/server/seal.ts` — Google sign-in and Gmail/Calendar connection, AES-256-GCM sealing
-- API: `auth/{signup,login,logout}` · `auth/google/{start,callback}` · `me` · `workspace` · `run` · `approvals/[id]` · `connections/google` · `status`
+- API: `auth/{signup,login,logout}` · `auth/google/{start,callback}` · `me` · `workspace` · `run` · `approvals/[id]` · `connections/google` · `status` · `cron/tick`
 
 ## Accounts and data
 
@@ -58,6 +61,21 @@ Global: `⌘K` command palette (navigate or delegate in one line), light/dark th
 - **Workspace:** teammates, routines, AI accounts, context and profile are one versioned document per account. Every save sends the version it was based on, so two tabs can't silently overwrite each other; the loser gets the latest copy.
 - **Server-authoritative:** messages, approvals and activity are written by the server. A run takes only `agentId` + `text` from the browser; the teammate's tools, prompt, AI accounts and memory are loaded from the database. Approving executes the stored action; the browser can edit only the text fields that tool declares editable, and an action can't execute twice.
 - **Demo:** signed-out visitors get a browser-only sample workspace. `/api/run` simulates it without calling any model or tool, so the demo can't spend your API credit.
+
+## Routines (scheduler)
+
+Routines run on their own at the scheduled time, in the account's timezone.
+
+- **Schedules:** weekdays, every day, specific days, every hour in a window, every 15/30/45 minutes in a window, or *when something happens*. Event triggers aren't wired yet, so those routines run on demand with **Run now**.
+- **Exactly once:** each occurrence is claimed in `routine_runs`, which has a unique (workspace, routine, time) key. Any number of schedulers or instances can tick at once and each 08:00 still runs once.
+- **Catch-up, not replay:** after downtime, an occurrence still runs if it's under 90 minutes late. Anything older is skipped rather than sent late. A new routine never runs occurrences from before it was created. Disabled routines and paused teammates don't run.
+- **Same rules as chat:** a scheduled run is an ordinary teammate run, so anything outgoing still waits in Approvals. The result lands in the teammate's chat labelled *Scheduled*, and the routine shows *Done*, *Waiting for your approval* or *Failed* with the reason.
+- **No fake work:** unattended runs never fall back to demo data. If no AI account has an API key, the run fails and says so. Runs interrupted by a crash are marked failed after 15 minutes.
+
+**Running it:**
+- **`next start`, Docker or a VM:** the in-process loop starts automatically and checks every minute. Set `SCHEDULER=off` to disable it.
+- **Vercel / serverless:** add a cron that calls `GET /api/cron/tick` with `Authorization: Bearer $CRON_SECRET`, e.g. in `vercel.json`: `{"crons":[{"path":"/api/cron/tick","schedule":"*/5 * * * *"}]}`. Vercel sends the header automatically when `CRON_SECRET` is set. Hobby plans only allow daily crons, so use Pro, or an external cron such as GitHub Actions or cron-job.org.
+- A tick has a time budget. Routines it can't start in time stay unclaimed and are picked up by the next tick.
 
 ## Execution
 
@@ -86,9 +104,11 @@ What teammates can do with it: search mail (Gmail query syntax), read a day's ca
 
 Before a public launch: `gmail.readonly` and `gmail.send` are restricted scopes, so Google requires app verification and a third-party security assessment. Until then, only test users can connect.
 
-`npm test` runs 17 end-to-end checks against the real route handlers: accounts, sessions, rate limits, cross-site blocking, workspace versioning, persisted runs, approval tampering and double-execution, cross-account isolation, demo lockdown, and the Google sign-in, connect, refresh and send paths.
+`npm test` runs the schedule unit tests plus 22 end-to-end checks against the real route handlers: accounts, sessions, rate limits, cross-site blocking, workspace versioning, persisted runs, approval tampering and double-execution, cross-account isolation, demo lockdown, the Google sign-in, connect, refresh and send paths, and the scheduler (exactly-once under concurrency, timezone, catch-up window, paused teammates, no fabricated runs, cron auth, Run now).
 
 **Before production:**
 - AI provider keys and the Slack, GitHub and Linear tokens are still **server-wide**, so every account uses them. Give each workspace its own keys before inviting other people.
 - The login rate limiter is in-memory, so it's per instance. Use Redis or Upstash when running more than one.
 - There's no email verification or password reset yet.
+- The scheduler scans every workspace on each tick. That's fine for thousands of workspaces; beyond that, store the next run time and index it.
+- Nothing notifies you when a scheduled run needs approval or fails, apart from the in-app badge. Email or Slack notifications are next.

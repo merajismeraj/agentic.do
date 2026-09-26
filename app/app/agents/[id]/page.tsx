@@ -8,8 +8,9 @@ import { AgentConfig, type AgentDraft } from "@/components/agent-config";
 import { ApprovalCard } from "@/components/approval-card";
 import { Composer } from "@/components/composer";
 import { RoutineForm } from "@/components/routine-form";
+import { RoutineRow } from "@/components/routine-row";
 import { Steps } from "@/components/steps";
-import { AgentAvatar, Badge, Button, Card, Modal, ProviderLogo, Rich, Segmented, Switch, ToolLogo } from "@/components/ui";
+import { AgentAvatar, Badge, Button, Card, Modal, ProviderLogo, Rich, Segmented, ToolLogo } from "@/components/ui";
 import { AUTONOMY, integrationById, providerById } from "@/lib/catalog";
 import { useStore } from "@/lib/store";
 import type { Agent } from "@/lib/types";
@@ -119,6 +120,11 @@ function Chat({ agent, onTab }: { agent: Agent; onTab: (t: Tab) => void }) {
                   <div className="mb-1 flex items-baseline gap-2 text-sm">
                     <span className="font-semibold">{agent.name}</span>
                     <span className="text-xs text-muted">{ago(m.at)}</span>
+                    {m.trigger && (
+                      <Badge tone="accent">
+                        <CalendarClock size={11} /> {m.trigger.scheduled ? "Scheduled" : "Routine"} · {m.trigger.title}
+                      </Badge>
+                    )}
                     {m.mode === "demo" && (
                       <Link href="/app/brains" title="No API key configured — this run used demo data">
                         <Badge>Demo</Badge>
@@ -239,7 +245,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 }
 
 function Routines({ agent }: { agent: Agent }) {
-  const { state, update } = useStore();
+  const { state } = useStore();
   const [adding, setAdding] = useState(false);
   const routines = state.routines.filter((r) => r.agentId === agent.id);
   return (
@@ -252,21 +258,7 @@ function Routines({ agent }: { agent: Agent }) {
       </div>
       <Card className="divide-y divide-line">
         {routines.map((r) => (
-          <div key={r.id} className="flex items-center gap-4 px-4 py-3.5">
-            <CalendarClock size={16} className="text-muted" />
-            <div className="min-w-0 flex-1">
-              <div className="text-sm font-medium">{r.title}</div>
-              <div className="text-xs text-muted">
-                {r.cadence}
-                {r.lastResult && ` · Last run: ${r.lastResult}`}
-              </div>
-            </div>
-            <Switch
-              label="Enabled"
-              checked={r.enabled}
-              onChange={(v) => update((s) => ({ ...s, routines: s.routines.map((x) => (x.id === r.id ? { ...x, enabled: v } : x)) }))}
-            />
-          </div>
+          <RoutineRow key={r.id} routine={r} />
         ))}
         {!routines.length && <div className="p-6 text-center text-sm text-muted">No routines yet — add one so {agent.name} works on schedule.</div>}
       </Card>

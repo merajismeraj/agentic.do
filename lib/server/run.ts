@@ -20,12 +20,23 @@ const ACTION: Record<string, (i: Record<string, unknown>) => string> = {
 };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-export async function execute(req: RunRequest, emit: Emit, ctx: ToolContext) {
+export async function execute(req: RunRequest, emit: Emit, ctx: ToolContext, opts: { requireLive?: boolean } = {}) {
   const all = adapters();
   const order = rank(req.brains, req.agent, req.text, req.routing);
   const live = order.filter((d) => all[d.providerId]?.available);
 
-  if (!live.length) return simulate(req, emit, order.length > 0);
+  if (!order.length) {
+    emit({ t: "error", message: "No AI account is connected yet — add one in AI accounts, then try again." });
+    return;
+  }
+  if (!live.length) {
+    // Unattended runs never fabricate results into a real workspace.
+    if (opts.requireLive) {
+      emit({ t: "error", message: "None of your AI accounts can run live yet — add an API key to one of them in AI accounts." });
+      return;
+    }
+    return simulate(req, emit, true);
+  }
 
   const system = systemPrompt(req);
   const tools = toolsFor(req.agent.tools.filter((t) => req.connected.includes(t)));
