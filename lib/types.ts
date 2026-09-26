@@ -1,0 +1,150 @@
+export type ProviderId =
+  | "chatgpt"
+  | "claude"
+  | "gemini"
+  | "grok"
+  | "copilot"
+  | "perplexity"
+  | "mistral"
+  | "deepseek";
+
+export type Strength = "reasoning" | "writing" | "coding" | "research" | "speed" | "vision";
+
+export interface Provider {
+  id: ProviderId;
+  name: string;
+  vendor: string;
+  plans: string[];
+  models: string[];
+  color: string;
+  glyph: string;
+  strengths: Strength[];
+}
+
+export interface Brain {
+  providerId: ProviderId;
+  plan: string;
+  /** 0–100, share of the plan's rolling limit already consumed */
+  usage: number;
+  resetsIn: string;
+  enabled: boolean;
+  connectedAt: number;
+}
+
+export type IntegrationCategory =
+  | "Communication"
+  | "Productivity"
+  | "Engineering"
+  | "Sales & CRM"
+  | "Support"
+  | "Finance"
+  | "Design";
+
+export interface Integration {
+  id: string;
+  name: string;
+  category: IntegrationCategory;
+  color: string;
+  glyph: string;
+  blurb: string;
+  scopes: string[];
+}
+
+export type Autonomy = "ask" | "report" | "auto";
+
+export interface Agent {
+  id: string;
+  name: string;
+  role: string;
+  emoji: string;
+  color: string;
+  instructions: string;
+  tools: string[];
+  /** "auto" routes to the best connected brain per task */
+  brain: ProviderId | "auto";
+  autonomy: Autonomy;
+  status: "idle" | "working" | "paused";
+  hiredAt: number;
+}
+
+export interface Routine {
+  id: string;
+  agentId: string;
+  title: string;
+  cadence: string;
+  /** minutes after midnight for the next run, used to lay out today's timeline */
+  nextRunMinute: number;
+  enabled: boolean;
+  lastResult?: string;
+}
+
+export type StepKind = "route" | "think" | "tool" | "result" | "approval";
+
+export interface Step {
+  id: string;
+  kind: StepKind;
+  label: string;
+  detail?: string;
+  toolId?: string;
+  providerId?: ProviderId;
+  state: "pending" | "running" | "done";
+}
+
+export interface Message {
+  id: string;
+  threadId: string;
+  author: "user" | "agent";
+  agentId?: string;
+  text: string;
+  at: number;
+  steps?: Step[];
+  approvalId?: string;
+}
+
+export interface Approval {
+  id: string;
+  agentId: string;
+  threadId?: string;
+  title: string;
+  summary: string;
+  toolId: string;
+  preview: { label: string; value: string }[];
+  status: "pending" | "approved" | "rejected";
+  at: number;
+}
+
+export interface Activity {
+  id: string;
+  agentId: string;
+  text: string;
+  toolId?: string;
+  at: number;
+}
+
+export interface MemoryFact {
+  id: string;
+  text: string;
+  source: string;
+  scope: "me" | "team" | "company";
+}
+
+export interface User {
+  name: string;
+  company: string;
+  role: string;
+  timezone: string;
+}
+
+export interface State {
+  onboarded: boolean;
+  user: User;
+  brains: Brain[];
+  routing: "auto" | "cost" | "quality";
+  connected: string[];
+  agents: Agent[];
+  routines: Routine[];
+  messages: Message[];
+  approvals: Approval[];
+  activity: Activity[];
+  memory: MemoryFact[];
+}
