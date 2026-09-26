@@ -139,7 +139,13 @@ let ready: Promise<Db> | null = null;
 export function db(): Promise<Db> {
   // Cache across hot reloads in dev.
   const g = globalThis as unknown as { __agenticDb?: Promise<Db> };
-  if (!ready) ready = g.__agenticDb ?? (g.__agenticDb = connect());
+  if (!ready)
+    ready = g.__agenticDb ??= connect().catch((e) => {
+      // Don't cache a failed connection: the next request retries.
+      ready = null;
+      g.__agenticDb = undefined;
+      throw e;
+    });
   return ready;
 }
 
@@ -147,9 +153,24 @@ async function connect(): Promise<Db> {
   const url = process.env.DATABASE_URL?.trim();
   let base: Db;
 
+  if (!url && process.env.VERCEL) {
+    throw new Error("DATABASE_URL is required on Vercel (the embedded database can't persist on serverless). Use your Supabase pooler connection string.");
+  }
+
   if (url) {
     const { Pool } = await import("pg");
-    const pool = new Pool({ connectionString: url, max: 5 });
+    const host = new URL(url).hostname;
+    const local = host === "localhost" || host === "127.0.0.1" || url.includes("sslmode=disable");
+    const ca = process.env.DATABASE_CA_CERT?.replace(/\\n/g, "\n");
+    const pool = new Pool({
+      connectionString: url.replace(/[?&]sslmode=[^&]*/, ""),
+      // Serverless: few connections per instance; the Supabase pooler multiplexes the rest.
+      max: process.env.VERCEL ? 3 : 5,
+      idleTimeoutMillis: 10_000,
+      connectionTimeoutMillis: 10_000,
+      ssl: local ? undefined : ca ? { ca } : { rejectUnauthorized: false },
+    });
+    pool.on("error", (e) => console.error("pg pool error", e));
     const wrap = (c: { query: (s: string, p?: unknown[]) => Promise<{ rows: unknown[] }> }): Db => ({
       query: async <T,>(s: string, p?: unknown[]) => ({ rows: (await c.query(s, p)).rows as T[] }),
       transaction: () => {
