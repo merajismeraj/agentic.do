@@ -10,8 +10,10 @@ import { useStore } from "@/lib/store";
 import type { IntegrationCategory } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
+const GOOGLE = ["gmail", "gcal"];
+
 export default function IntegrationsPage() {
-  const { state, update, toast, live } = useStore();
+  const { state, update, toast, live, refreshLive } = useStore();
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<"all" | "connected">("all");
   const [cat, setCat] = useState<IntegrationCategory | "All">("All");
@@ -89,6 +91,7 @@ export default function IntegrationsPage() {
         {list.map((i) => {
           const on = state.connected.includes(i.id);
           const users = state.agents.filter((a) => a.tools.includes(i.id));
+          const google = GOOGLE.includes(i.id);
           return (
             <Card key={i.id} className="flex flex-col p-4">
               <div className="flex items-start gap-3">
@@ -103,11 +106,22 @@ export default function IntegrationsPage() {
                     {on && live && (live.tools[i.id] ? <Badge tone="ok">Live API</Badge> : <Badge>Demo data</Badge>)}
                   </div>
                 </div>
-                {on ? (
+                {on && google && live?.google.configured && !live.tools[i.id] ? (
+                  <Button size="sm" variant="soft" onClick={() => setConnecting(i.id)}>
+                    Go live
+                  </Button>
+                ) : on ? (
                   <Button
                     size="sm"
                     variant="ghost"
-                    onClick={() => {
+                    onClick={async () => {
+                      if (google && live?.google.email) {
+                        await fetch("/api/oauth/google/disconnect", { method: "POST" }).catch(() => {});
+                        update((s) => ({ ...s, connected: s.connected.filter((x) => !GOOGLE.includes(x)) }));
+                        await refreshLive();
+                        toast("Google disconnected — Gmail and Calendar access revoked");
+                        return;
+                      }
                       update((s) => ({ ...s, connected: s.connected.filter((x) => x !== i.id) }));
                       toast(`${i.name} disconnected`);
                     }}
@@ -121,6 +135,7 @@ export default function IntegrationsPage() {
                 )}
               </div>
               <p className="mt-3 text-[13px] text-fg-2">{i.blurb}</p>
+              {on && google && live?.google.email && <p className="mt-1 truncate text-xs text-muted">Signed in as {live.google.email}</p>}
               {users.length > 0 && (
                 <div className="mt-3 flex items-center gap-1.5 border-t border-line pt-3 text-xs text-muted">
                   <span className="flex -space-x-1">

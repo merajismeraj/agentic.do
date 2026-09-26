@@ -43,7 +43,8 @@ Global: `⌘K` command palette (navigate or delegate in one line), light/dark th
 - `lib/server/run.ts` — run orchestrator: routing, failover, tool loop, approval gate, NDJSON events
 - `lib/server/providers.ts` — Anthropic SDK adapter + OpenAI-compatible adapter (OpenAI, Gemini, xAI, Mistral, DeepSeek, Perplexity)
 - `lib/server/tools.ts` — tool registry; live connectors for Slack, GitHub and Linear, demo data for the rest
-- `app/api/run` (stream a run) · `app/api/approve` (execute an approved action) · `app/api/status` (what's live)
+- `lib/server/google.ts` + `lib/server/seal.ts` — Google OAuth, Gmail/Calendar client, encrypted session cookie
+- `app/api/run` (stream a run) · `app/api/approve` (execute an approved action) · `app/api/status` (what's live) · `app/api/oauth/google/*` (start, callback, disconnect)
 
 ## Execution
 
@@ -56,6 +57,22 @@ How a run works:
 3. **Approval gate.** Write actions (send email, post to Slack, create issue…) are never executed during the run unless the teammate has full autonomy. They become approval cards. **Approve** calls `/api/approve`, which runs the action, with any edits you made on the card.
 4. **Failover.** If a provider errors before any tool has run, the run moves to the next ranked provider. After a tool has run, it stops rather than risk doing the work twice.
 
-Live connectors today: Slack (`SLACK_BOT_TOKEN`), GitHub (`GITHUB_TOKEN`, `GITHUB_REPO`), Linear (`LINEAR_API_KEY`). Gmail, Calendar, Notion, HubSpot, Stripe and Intercom return demo data until OAuth is added.
+Live connectors today: **Gmail and Google Calendar** (per-user Google sign-in), Slack (`SLACK_BOT_TOKEN`), GitHub (`GITHUB_TOKEN`, `GITHUB_REPO`), Linear (`LINEAR_API_KEY`). Notion, HubSpot, Stripe and Intercom return demo data until their OAuth is added.
 
-**Not production‑ready yet:** there are no user accounts, so `/api/run` and `/api/approve` are unauthenticated and act with the server's credentials. Keep deployments private until auth lands. Workspace state still lives in the browser (`localStorage`).
+### Google sign-in (Gmail + Calendar)
+
+1. In Google Cloud, enable the **Gmail API** and the **Google Calendar API**.
+2. Configure the OAuth consent screen. While it's in *Testing*, add your own Google account as a test user.
+3. Create an OAuth client of type **Web application** with the redirect URI `http://localhost:3000/api/oauth/google/callback` (plus your production URL).
+4. Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` and `SESSION_SECRET` (32+ random characters).
+5. In the app, open **Integrations → Gmail → Connect** (or **Go live**) and choose **Continue with Google**.
+
+One sign-in covers both tools. Scopes: `gmail.readonly`, `gmail.send`, `calendar.events`, plus `openid email`. The refresh token is stored in an **AES-256-GCM encrypted, httpOnly cookie**, so each browser acts as its own Google account and the server keeps no Google credentials. **Disconnect** revokes the token at Google.
+
+What teammates can do with it: search mail (Gmail query syntax), read a day's calendar in your timezone, and, after you approve, send email (threaded replies when replying) and create events with invites.
+
+Before a public launch: `gmail.readonly` and `gmail.send` are restricted scopes, so Google requires app verification and a third-party security assessment. Until then, only test users can connect.
+
+`npm test` runs the Google suite against a mocked Google API: sign-in, state check, redirect safety, encrypted session, refresh, Gmail and Calendar calls, header-injection safety, and revoke.
+
+**Not production‑ready yet:** there are no user accounts. Google actions use the caller's own session, but the provider API keys and the Slack, GitHub and Linear tokens are server-wide, and `/api/run` and `/api/approve` are unauthenticated. Keep deployments private until auth lands. Workspace state still lives in the browser (`localStorage`).

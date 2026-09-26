@@ -41,7 +41,7 @@ const SETUP = [
 ];
 
 export function Shell({ children }: { children: ReactNode }) {
-  const { state, ready } = useStore();
+  const { state, ready, update, refreshLive, toast } = useStore();
   const router = useRouter();
   const path = usePathname();
   const [cmd, setCmd] = useState(false);
@@ -64,6 +64,26 @@ export function Shell({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => setMobile(false), [path]);
+
+  // Returning from Google sign-in: reflect the outcome, then clean the URL.
+  useEffect(() => {
+    if (!ready) return;
+    const params = new URLSearchParams(window.location.search);
+    const g = params.get("google");
+    if (!g) return;
+    if (g === "connected") {
+      // Trust the server's session, not the URL.
+      refreshLive().then((st) => {
+        if (st?.google.email) {
+          update((s) => ({ ...s, connected: [...new Set([...s.connected, "gmail", "gcal"])] }));
+          toast(`Google connected as ${st.google.email}`);
+        } else toast("Google sign-in didn't complete — try again");
+      });
+    } else if (g === "denied") toast("Google access was not granted");
+    else if (g === "not_configured") toast("Google sign-in isn't set up on this server yet");
+    else toast(`Couldn't connect Google${params.get("message") ? `: ${params.get("message")}` : ""}`);
+    window.history.replaceState(null, "", window.location.pathname);
+  }, [ready, update, refreshLive, toast]);
 
   useEffect(() => {
     const open = () => setHire(true);

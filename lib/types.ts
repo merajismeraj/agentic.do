@@ -178,4 +178,5 @@ export type RunEvent =
 export interface LiveStatus {
   providers: Record<ProviderId, { live: boolean; model: string }>;
   tools: Record<string, boolean>;
+  google: { configured: boolean; email?: string };
 }

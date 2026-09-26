@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --conditions=react-server tests/google.test.mts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.128.0",
@@ -25,6 +26,7 @@
     "@types/react-dom": "^19.3.0",
     "postcss": "^8.5.28",
     "tailwindcss": "^4.3.3",
+    "tsx": "^4.23.15",
     "typescript": "^5.9.3"
   }
 }

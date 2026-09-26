@@ -5,7 +5,7 @@ import { EMPTY } from "../seed";
 import type { Approval, RunEvent, RunRequest, Step } from "../types";
 import { uid } from "../utils";
 import { adapters } from "./providers";
-import { toolByName, toolsFor } from "./tools";
+import { toolByName, toolsFor, type ToolContext } from "./tools";
 
 type Emit = (e: RunEvent) => void;
 
@@ -20,7 +20,7 @@ const ACTION: Record<string, (i: Record<string, unknown>) => string> = {
 };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-export async function execute(req: RunRequest, emit: Emit) {
+export async function execute(req: RunRequest, emit: Emit, ctx: ToolContext) {
   const all = adapters();
   const order = rank(req.brains, req.agent, req.text, req.routing);
   const live = order.filter((d) => all[d.providerId]?.available);
@@ -90,7 +90,7 @@ export async function execute(req: RunRequest, emit: Emit) {
           const step: Step = { id: uid(), kind: "tool", toolId: tool.integration, label: tool.label, state: "running" };
           emit({ t: "step", step });
           try {
-            const result = await tool.run(input);
+            const result = await tool.run(input, ctx);
             emit({ t: "step", step: { ...step, state: "done", detail: result.live ? result.summary : `${result.summary} · demo data` } });
             return JSON.stringify({ summary: result.summary, data: result.data, source: result.live ? "live" : "demo fixture" });
           } catch (e) {

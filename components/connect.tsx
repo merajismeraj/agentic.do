@@ -120,16 +120,26 @@ function MethodCard({ active, onClick, icon, title, body, disabled }: { active: 
   );
 }
 
-/** Simulated OAuth consent for a work tool. */
+const GOOGLE_TOOLS = ["gmail", "gcal"];
+
+/** OAuth consent for a work tool: real Google sign-in when configured, simulated otherwise. */
 export function ConnectTool({ id, onClose }: { id: string | null; onClose: () => void }) {
-  const { update, toast } = useStore();
+  const { update, toast, live } = useStore();
   const [busy, setBusy] = useState(false);
   const i = id ? integrationById(id) : null;
   useEffect(() => setBusy(false), [id]);
   if (!i) return null;
 
+  const isGoogle = GOOGLE_TOOLS.includes(i.id);
+  const realGoogle = isGoogle && !!live?.google.configured;
+
   const connect = () => {
     setBusy(true);
+    if (realGoogle) {
+      // Full-page redirect to Google's consent screen; we land back on this page.
+      window.location.href = `/api/oauth/google/start?return=${encodeURIComponent(window.location.pathname)}`;
+      return;
+    }
     setTimeout(() => {
       update((s) => ({ ...s, connected: [...new Set([...s.connected, i.id])] }));
       toast(`${i.name} connected`);
@@ -164,11 +174,20 @@ export function ConnectTool({ id, onClose }: { id: string | null; onClose: () =>
           ))}
         </div>
         <p className="mt-3 text-center text-xs text-muted">Anything that leaves your company still waits for your approval.</p>
+        {isGoogle && (
+          <p className="mt-2 rounded-lg bg-surface-2 px-3 py-2 text-center text-xs leading-relaxed text-muted">
+            {realGoogle
+              ? "One Google sign-in connects both Gmail and Calendar. Tokens are encrypted and stay tied to this browser."
+              : "Google sign-in isn't configured on this server, so this connects with demo data. Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and SESSION_SECRET to go live."}
+          </p>
+        )}
         <Button variant="primary" size="lg" className="mt-5 w-full" onClick={connect} disabled={busy}>
           {busy ? (
             <>
               <Loader2 size={16} className="animate-spin" /> Authorizing…
             </>
+          ) : realGoogle ? (
+            "Continue with Google"
           ) : (
             `Authorize ${i.name}`
           )}

@@ -1,4 +1,5 @@
 import "server-only";
+import { calendarCreate, calendarDay, gmailSearch, gmailSend, type GoogleAuth } from "./google";
 
 /**
  * Tool registry. Each tool belongs to an integration, declares whether it only
@@ -20,6 +21,12 @@ export interface ToolResult {
   data?: unknown;
 }
 
+/** Per-request credentials and settings a tool may use. */
+export interface ToolContext {
+  google?: GoogleAuth;
+  timeZone: string;
+}
+
 export interface ToolDef {
   name: string;
   integration: string;
@@ -27,8 +34,8 @@ export interface ToolDef {
   label: string;
   description: string;
   input_schema: JsonSchema;
-  isLive: () => boolean;
-  run: (input: Record<string, unknown>) => Promise<ToolResult>;
+  isLive: (ctx: ToolContext) => boolean;
+  run: (input: Record<string, unknown>, ctx: ToolContext) => Promise<ToolResult>;
   /** Fields shown on the approval card for write tools. */
   preview?: (input: Record<string, unknown>) => { label: string; value: string }[];
 }
@@ -99,69 +106,115 @@ export const TOOLS: ToolDef[] = [
     integration: "gmail",
     kind: "read",
     label: "Searching Gmail",
-    description: "Search the user's email. Returns matching threads with sender, subject, snippet and date.",
-    input_schema: { type: "object", properties: { query: { type: "string", description: "Gmail search query" } }, required: ["query"] },
-    isLive: () => false,
-    run: async ({ query }) =>
-      demo(`3 threads matching “${str(query)}”`, [
-        { from: "priya@northwind.com", subject: "MSA redlines", snippet: "Aligned on everything except 7.2 (liability cap). Can we close this week?", date: "today 08:12" },
-        { from: "ops@acme.io", subject: "Pricing for 40 seats", snippet: "Is there an annual discount above 25 seats?", date: "yesterday" },
-        { from: "sam@yourco.com", subject: "Q4 plan?", snippet: "Still waiting on the Q4 plan doc — Tuesday still OK?", date: "2 days ago" },
-      ]),
+    description:
+      "Search the user's email with Gmail search syntax (e.g. 'is:unread newer_than:2d', 'from:priya'). Returns sender, subject, date, snippet, thread_id and message_id for each match.",
+    input_schema: {
+      type: "object",
+      properties: { query: { type: "string", description: "Gmail search query" }, max: { type: "number", description: "Max results (default 8)" } },
+      required: ["query"],
+    },
+    isLive: (ctx) => !!ctx.google,
+    run: async ({ query, max }, ctx) => {
+      if (!ctx.google)
+        return demo(`3 threads matching “${str(query)}”`, [
+          { from: "priya@northwind.com", subject: "MSA redlines", snippet: "Aligned on everything except 7.2 (liability cap). Can we close this week?", date: "today 08:12" },
+          { from: "ops@acme.io", subject: "Pricing for 40 seats", snippet: "Is there an annual discount above 25 seats?", date: "yesterday" },
+          { from: "sam@yourco.com", subject: "Q4 plan?", snippet: "Still waiting on the Q4 plan doc — Tuesday still OK?", date: "2 days ago" },
+        ]);
+      const hits = await gmailSearch(ctx.google, str(query), Number(max) || 8);
+      return { ok: true, live: true, summary: `${hits.length} message${hits.length === 1 ? "" : "s"} matching “${str(query)}”`, data: hits };
+    },
   },
   {
     name: "gmail_send",
     integration: "gmail",
     kind: "write",
     label: "Sending email",
-    description: "Send an email (or reply) on the user's behalf. Requires the user's approval before it is sent.",
+    description:
+      "Send an email from the user's Gmail. To reply in an existing conversation, pass thread_id and message_id from gmail_search. Requires the user's approval before it is sent.",
     input_schema: {
       type: "object",
-      properties: { to: { type: "string" }, subject: { type: "string" }, body: { type: "string" } },
+      properties: {
+        to: { type: "string" },
+        subject: { type: "string" },
+        body: { type: "string", description: "Plain-text body, signed in the user's voice" },
+        thread_id: { type: "string", description: "Gmail thread_id when replying" },
+        message_id: { type: "string", description: "Message-ID header of the message being replied to" },
+      },
       required: ["to", "subject", "body"],
     },
-    isLive: () => false,
+    isLive: (ctx) => !!ctx.google,
     preview: (i) => [
       { label: "To", value: str(i.to) },
       { label: "Subject", value: str(i.subject) },
       { label: "Body", value: str(i.body) },
     ],
-    run: async (i) => demo(`Demo only — email to ${str(i.to)} was not sent (Gmail live sending isn't set up yet)`, null),
+    run: async (i, ctx) => {
+      if (!ctx.google) return demo(`Demo only — email to ${str(i.to)} was not sent (connect Google to send for real)`, null);
+      const sent = await gmailSend(ctx.google, {
+        to: str(i.to),
+        subject: str(i.subject),
+        body: str(i.body),
+        threadId: str(i.thread_id) || undefined,
+        inReplyTo: str(i.message_id) || undefined,
+      });
+      return { ok: true, live: true, summary: `Sent to ${str(i.to)} from ${ctx.google.email}`, data: sent };
+    },
   },
   {
     name: "calendar_list_events",
     integration: "gcal",
     kind: "read",
     label: "Checking calendar",
-    description: "List the user's calendar events for a day. Use 'today', 'tomorrow' or an ISO date.",
+    description: "List the user's calendar events for one day. Use 'today', 'tomorrow' or a date like 2026-10-01. Times are in the user's timezone.",
     input_schema: { type: "object", properties: { day: { type: "string" } }, required: ["day"] },
-    isLive: () => false,
-    run: async ({ day }) =>
-      demo(`4 events ${str(day, "today")}`, [
-        { time: "09:30", title: "Eng standup", attendees: 8 },
-        { time: "11:30", title: "Northwind renewal ($48k ARR)", attendees: ["priya@northwind.com"] },
-        { time: "14:00", title: "1:1 with Sam" },
-        { time: "16:00", title: "Board prep (deep work)" },
-      ]),
+    isLive: (ctx) => !!ctx.google,
+    run: async ({ day }, ctx) => {
+      if (!ctx.google)
+        return demo(`4 events ${str(day, "today")}`, [
+          { time: "09:30", title: "Eng standup", attendees: 8 },
+          { time: "11:30", title: "Northwind renewal ($48k ARR)", attendees: ["priya@northwind.com"] },
+          { time: "14:00", title: "1:1 with Sam" },
+          { time: "16:00", title: "Board prep (deep work)" },
+        ]);
+      const r = await calendarDay(ctx.google, str(day, "today"), ctx.timeZone);
+      return { ok: true, live: true, summary: `${r.events.length} event${r.events.length === 1 ? "" : "s"} on ${r.date}`, data: r };
+    },
   },
   {
     name: "calendar_create_event",
     integration: "gcal",
     kind: "write",
     label: "Creating calendar event",
-    description: "Create a calendar event and invite guests. Requires approval.",
+    description:
+      "Create an event on the user's primary calendar and email invites to guests. `start` is local time in the user's timezone, formatted 2026-10-01T10:00. Requires approval.",
     input_schema: {
       type: "object",
-      properties: { title: { type: "string" }, start: { type: "string" }, duration_minutes: { type: "number" }, guests: { type: "array", items: { type: "string" } } },
+      properties: {
+        title: { type: "string" },
+        start: { type: "string", description: "Local start time, e.g. 2026-10-01T10:00" },
+        duration_minutes: { type: "number" },
+        guests: { type: "array", items: { type: "string" } },
+      },
       required: ["title", "start"],
     },
-    isLive: () => false,
+    isLive: (ctx) => !!ctx.google,
     preview: (i) => [
       { label: "Event", value: str(i.title) },
-      { label: "When", value: `${str(i.start)} · ${str(i.duration_minutes, "30")} min` },
-      { label: "Guests", value: Array.isArray(i.guests) ? i.guests.join(", ") : "—" },
+      { label: "When", value: `${str(i.start).replace("T", " ")} · ${str(i.duration_minutes, "30")} min` },
+      { label: "Guests", value: Array.isArray(i.guests) && i.guests.length ? i.guests.join(", ") : "—" },
     ],
-    run: async (i) => demo(`Event “${str(i.title)}” created (demo)`, null),
+    run: async (i, ctx) => {
+      if (!ctx.google) return demo(`Demo only — “${str(i.title)}” was not added (connect Google to create events)`, null);
+      const ev = await calendarCreate(ctx.google, {
+        title: str(i.title),
+        start: str(i.start),
+        durationMinutes: Number(i.duration_minutes) || 30,
+        guests: Array.isArray(i.guests) ? i.guests.map(String) : [],
+        timeZone: ctx.timeZone,
+      });
+      return { ok: true, live: true, summary: `Added “${str(i.title)}” to ${ctx.google.email}'s calendar`, data: { link: ev.htmlLink } };
+    },
   },
   {
     name: "slack_read_channel",
@@ -229,7 +282,7 @@ export const TOOLS: ToolDef[] = [
       type: "object",
       properties: { repo: { type: "string", description: "owner/repo; defaults to the workspace repo" }, state: { type: "string", enum: ["open", "closed", "all"] } },
     },
-    isLive: () => !!env("GITHUB_TOKEN"),
+    isLive: () => !!(env("GITHUB_TOKEN") && env("GITHUB_REPO")),
     run: async ({ repo, state }) => {
       const r = str(repo) || env("GITHUB_REPO");
       if (!env("GITHUB_TOKEN") || !r)
@@ -260,7 +313,7 @@ export const TOOLS: ToolDef[] = [
       properties: { repo: { type: "string" }, number: { type: "number" }, body: { type: "string" } },
       required: ["number", "body"],
     },
-    isLive: () => !!env("GITHUB_TOKEN"),
+    isLive: () => !!(env("GITHUB_TOKEN") && env("GITHUB_REPO")),
     preview: (i) => [
       { label: "Where", value: `${str(i.repo) || env("GITHUB_REPO") || "repo"} #${str(i.number)}` },
       { label: "Comment", value: str(i.body) },
@@ -385,8 +438,8 @@ export function toolsFor(integrations: string[]) {
   return TOOLS.filter((t) => integrations.includes(t.integration));
 }
 
-export function toolStatus() {
+export function toolStatus(ctx: ToolContext) {
   const byIntegration: Record<string, boolean> = {};
-  for (const t of TOOLS) byIntegration[t.integration] = byIntegration[t.integration] || t.isLive();
+  for (const t of TOOLS) byIntegration[t.integration] = byIntegration[t.integration] || t.isLive(ctx);
   return byIntegration;
 }

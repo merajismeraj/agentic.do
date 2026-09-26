@@ -20,6 +20,7 @@ interface Store {
   toast: (text: string) => void;
   toasts: { id: string; text: string }[];
   live: LiveStatus | null;
+  refreshLive: () => Promise<LiveStatus | null>;
 }
 
 const Ctx = createContext<Store | null>(null);
@@ -38,11 +39,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (raw) setState({ ...EMPTY, ...JSON.parse(raw) });
     } catch {}
     setReady(true);
-    fetch("/api/status")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((j) => j && setLive(j as LiveStatus))
-      .catch(() => {});
   }, []);
+
+  const refreshLive = useCallback(async () => {
+    try {
+      const r = await fetch("/api/status", { cache: "no-store" });
+      if (!r.ok) return null;
+      const next = (await r.json()) as LiveStatus;
+      setLive(next);
+      return next;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshLive();
+  }, [refreshLive]);
 
   useEffect(() => {
     if (!ready) return;
@@ -198,7 +211,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
       (async () => {
         try {
-          const res = await fetch("/api/approve", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tool: a.call!.tool, input }) });
+          const res = await fetch("/api/approve", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tool: a.call!.tool, input, timeZone: s.user.timezone }) });
           const r = (await res.json()) as { ok: boolean; live?: boolean; summary: string };
           setState((st) => ({ ...st, approvals: st.approvals.map((x) => (x.id === id ? { ...x, result: r.summary } : x)) }));
           log(r.ok ? r.summary : `Failed: ${r.summary}`);
@@ -223,8 +236,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       toast,
       toasts,
       live,
+      refreshLive,
     }),
-    [state, ready, update, send, decide, toast, toasts, live],
+    [state, ready, update, send, decide, toast, toasts, live, refreshLive],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
