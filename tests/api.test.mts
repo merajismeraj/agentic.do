@@ -10,6 +10,8 @@ process.env.SESSION_SECRET = "x".repeat(40);
 process.env.GOOGLE_CLIENT_ID = "cid";
 process.env.GOOGLE_CLIENT_SECRET = "csecret";
 process.env.OPENAI_API_KEY = "test-key";
+// Only Alex may use the operator's server-wide keys; everyone else must bring their own.
+process.env.SHARED_AI_KEYS = "alex@northstar.com";
 for (const k of ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "GEMINI_API_KEY", "XAI_API_KEY", "SLACK_BOT_TOKEN", "GITHUB_TOKEN", "LINEAR_API_KEY", "DATABASE_URL", "OPENAI_BASE_URL"])
   delete process.env[k];
 
@@ -30,7 +32,8 @@ let chatScript: ((body: Any) => Any) | null = null;
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
   const body = init?.body != null ? String(init.body) : input instanceof Request ? await input.clone().text() : undefined;
-  calls.push({ url, body, headers: (init?.headers as Record<string, string>) ?? {} });
+  const hdrs = Object.fromEntries(new Headers((init?.headers as HeadersInit) ?? (input instanceof Request ? input.headers : undefined)));
+  calls.push({ url, body, headers: hdrs });
   const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { "content-type": "application/json" } });
   if (url === "https://oauth2.googleapis.com/token") {
     const p = new URLSearchParams(body);
@@ -55,6 +58,10 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         { summary: "Offsite", start: { date: "2026-10-01" }, end: { date: "2026-10-02" } },
       ],
     });
+  if (url === "https://api.openai.com/v1/models")
+    return hdrs.authorization === "Bearer sk-bob-good-key-1234567890" || hdrs.authorization === "Bearer test-key"
+      ? json({ object: "list", data: [] })
+      : json({ error: { message: "Incorrect API key provided", type: "invalid_request_error" } }, 401);
   if (url.endsWith("/chat/completions")) {
     const b = JSON.parse(body!);
     const msg = chatScript!(b);
@@ -258,6 +265,57 @@ await workspace.PUT(bob.req("/api/workspace", { method: "PUT", body: { doc: doc(
 res = await approve(bob, approvalEvent.id, { decision: "approved" });
 assert.equal(res.status, 404);
 ok("another account can't see or approve someone else's action");
+
+/* ---------------------------- per-workspace keys ---------------------- */
+
+const aiKeys = await route("app/api/ai-keys/[provider]/route.ts");
+const putKey = (b: Browser, provider: string, apiKey: string) =>
+  aiKeys.PUT(b.req(`/api/ai-keys/${provider}`, { method: "PUT", body: { apiKey } }), { params: Promise.resolve({ provider }) });
+const chatCalls = () => calls.filter((c) => c.url.endsWith("/chat/completions"));
+
+// Bob isn't on the SHARED_AI_KEYS list: the server's OpenAI key and Slack token are not his to use.
+process.env.SLACK_BOT_TOKEN = "xoxb-operator";
+body = await statusOf(bob);
+assert.equal(body.providers.chatgpt.live, false, "server key not shared with Bob");
+assert.equal(body.sharedKeys, false);
+assert.equal(body.tools.slack, false, "operator's Slack isn't Bob's");
+assert.equal((await statusOf(alex)).tools.slack, true, "allowed account can use it");
+delete process.env.SLACK_BOT_TOKEN;
+let n0 = chatCalls().length;
+let bobRun = await readStream(await run.POST(bob.req("/api/run", { method: "POST", body: { agentId: "rex", text: "Find leads" } })));
+assert.equal(bobRun.at(-1).mode, "demo", "no key → simulated, clearly labelled");
+assert.equal(chatCalls().length, n0, "never falls through to the operator's key");
+ok("server-wide AI keys and tool tokens are only used by accounts SHARED_AI_KEYS allows");
+
+res = await putKey(bob, "chatgpt", "sk-bob-wrong-key-000000000000");
+assert.equal(res.status, 400);
+assert.match((await res.json()).error, /OpenAI rejected this key/);
+assert.equal((await putKey(bob, "chatgpt", "short")).status, 400);
+assert.equal((await putKey(bob, "copilot", "sk-something-long-enough-123")).status, 400, "no public API");
+assert.equal((await putKey(bob, "nope", "sk-something-long-enough-123")).status, 404);
+assert.equal((await putKey(new Browser(), "chatgpt", "sk-bob-good-key-1234567890")).status, 401);
+res = await putKey(bob, "chatgpt", "sk-bob-good-key-1234567890");
+assert.deepEqual(await res.json(), { ok: true, hint: "…7890" });
+body = await statusOf(bob);
+assert.deepEqual(body.providers.chatgpt.key, { source: "workspace", hint: "…7890" });
+assert.equal(body.providers.chatgpt.live, true);
+const everything = JSON.stringify([body, await meOf(bob)]);
+assert.ok(!everything.includes("sk-bob-good-key"), "the key never comes back to the browser");
+const bobWs = (await (await (await route("lib/server/db.ts")).db()).query("select w.id from workspaces w join users u on u.id = w.owner_id where u.email = 'bob@other.com'")).rows[0];
+const rawKey = (await (await (await route("lib/server/db.ts")).db()).query("select secret from connections where workspace_id = $1 and provider = 'ai:chatgpt'", [bobWs.id])).rows[0].secret;
+assert.ok(!rawKey.includes("sk-bob"), "encrypted at rest");
+ok("keys are verified with the provider before saving, encrypted, and never returned");
+
+chatScript = () => ({ role: "assistant", content: "Here are your leads." });
+n0 = chatCalls().length;
+bobRun = await readStream(await run.POST(bob.req("/api/run", { method: "POST", body: { agentId: "rex", text: "Find leads" } })));
+assert.equal(bobRun.at(-1).mode, "live");
+assert.equal(chatCalls().length, n0 + 1);
+assert.equal(chatCalls().at(-1)!.headers!.authorization, "Bearer sk-bob-good-key-1234567890", "Bob's run is billed to Bob's key");
+res = await aiKeys.DELETE(bob.req("/api/ai-keys/chatgpt", { method: "DELETE" }), { params: Promise.resolve({ provider: "chatgpt" }) });
+assert.equal(res.status, 200);
+assert.equal((await statusOf(bob)).providers.chatgpt.live, false);
+ok("runs use the workspace's own key; removing it stops live runs");
 
 res = await approve(alex, approvalEvent.id, {
   decision: "approved",
@@ -544,7 +602,7 @@ assert.ok(mail.html.includes("Q4 &lt;script&gt;alert(1)&lt;/script&gt;") && !mai
 assert.ok(mail.html.includes("https://app.agentic.test/app/inbox"), "links use APP_URL");
 assert.ok(mail.text.includes("Review 2 approvals: https://app.agentic.test/app/inbox"));
 assert.ok(mail.text.includes("Hi Dana & team"));
-assert.match(alertCall.headers!["Idempotency-Key"], /^alerts-[0-9a-f]{40}$/);
+assert.match(alertCall.headers!["idempotency-key"], /^alerts-[0-9a-f]{40}$/);
 assert.equal((await scheduler.tick({ now: THU + 60_000 })).alerts.emails, 0, "nothing is emailed twice");
 ok("scheduled approvals are emailed once, grouped into one escaped email with working links");
 

@@ -204,8 +204,19 @@ export type RunEvent =
   | { t: "error"; message: string };
 
 export interface LiveStatus {
-  providers: Record<ProviderId, { live: boolean; model: string }>;
+  providers: Record<
+    ProviderId,
+    {
+      live: boolean;
+      model: string;
+      liveCapable: boolean;
+      /** Whose key powers it: this workspace's own, or the operator's shared one. Only the last 4 chars are exposed. */
+      key?: { source: "workspace" | "shared"; hint: string };
+    }
+  >;
   tools: Record<string, boolean>;
+  /** This account may use the operator's server-wide keys and tool tokens. */
+  sharedKeys: boolean;
   google: { configured: boolean; email?: string };
   email: { configured: boolean };
 }

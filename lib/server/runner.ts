@@ -2,6 +2,7 @@ import "server-only";
 import type { Agent, Approval, Message, RunEvent, RunRequest, Step } from "../types";
 import { newId } from "./auth";
 import { googleAuthFor } from "./google";
+import { accessFor } from "./keys";
 import { execute } from "./run";
 import { finishMessage, insertApproval, insertMessage, logActivity, threadHistory, type Workspace } from "./workspace";
 
@@ -50,7 +51,8 @@ export async function runTeammate(opts: {
     memory: ws.doc.memory,
     user: ws.doc.user,
   };
-  const ctx = { google: await googleAuthFor(ws.id), timeZone: ws.doc.user.timezone || "UTC" };
+  const access = await accessFor(ws);
+  const ctx = { google: await googleAuthFor(ws.id), timeZone: ws.doc.user.timezone || "UTC", shared: access.shared };
 
   const steps: Step[] = [];
   const approvals: Approval[] = [];
@@ -75,7 +77,7 @@ export async function runTeammate(opts: {
   // Record events strictly in order; approvals are persisted before anyone hears about them.
   let chain = Promise.resolve();
   try {
-    await execute(request, (e) => void (chain = chain.then(() => record(e))), ctx, { requireLive: opts.requireLive });
+    await execute(request, (e) => void (chain = chain.then(() => record(e))), ctx, { requireLive: opts.requireLive, keys: access.keys });
   } catch (e) {
     error = (e as Error).message || "Run failed";
     await chain;

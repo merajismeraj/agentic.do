@@ -4,7 +4,7 @@ import { plan, rank, truncate } from "../engine";
 import { EMPTY } from "../seed";
 import type { Approval, RunEvent, RunRequest, Step } from "../types";
 import { uid } from "../utils";
-import { adapters } from "./providers";
+import { adapters, type AiKeys } from "./providers";
 import { toolByName, toolsFor, type ToolContext } from "./tools";
 
 type Emit = (e: RunEvent) => void;
@@ -20,8 +20,8 @@ const ACTION: Record<string, (i: Record<string, unknown>) => string> = {
 };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-export async function execute(req: RunRequest, emit: Emit, ctx: ToolContext, opts: { requireLive?: boolean } = {}) {
-  const all = adapters();
+export async function execute(req: RunRequest, emit: Emit, ctx: ToolContext, opts: { requireLive?: boolean; keys?: AiKeys } = {}) {
+  const all = adapters(opts.keys);
   const order = rank(req.brains, req.agent, req.text, req.routing);
   const live = order.filter((d) => all[d.providerId]?.available);
 

@@ -25,6 +25,8 @@ export interface ToolResult {
 export interface ToolContext {
   google?: GoogleAuth;
   timeZone: string;
+  /** May use the operator's server-wide tokens (SHARED_AI_KEYS); otherwise those tools use demo data. */
+  shared?: boolean;
 }
 
 export interface ToolDef {
@@ -43,6 +45,8 @@ export interface ToolDef {
 }
 
 const env = (k: string) => process.env[k]?.trim() || undefined;
+/** A server-wide token, only for workspaces allowed to share the operator's credentials. */
+const tok = (ctx: ToolContext, k: string) => (ctx.shared ? env(k) : undefined);
 const str = (v: unknown, fallback = "") => (typeof v === "string" ? v : v == null ? fallback : String(v));
 const demo = (summary: string, data: unknown): ToolResult => ({ ok: true, live: false, summary, data });
 
@@ -227,9 +231,9 @@ export const TOOLS: ToolDef[] = [
     label: "Reading Slack",
     description: "Read the most recent messages from a Slack channel, e.g. '#eng'.",
     input_schema: { type: "object", properties: { channel: { type: "string" }, limit: { type: "number" } }, required: ["channel"] },
-    isLive: () => !!env("SLACK_BOT_TOKEN"),
-    run: async ({ channel, limit }) => {
-      if (!env("SLACK_BOT_TOKEN"))
+    isLive: (ctx) => !!tok(ctx, "SLACK_BOT_TOKEN"),
+    run: async ({ channel, limit }, ctx) => {
+      if (!tok(ctx, "SLACK_BOT_TOKEN"))
         return demo(`12 recent messages in ${str(channel)}`, [
           { user: "maya", text: "billing v2 PR is up, needs review" },
           { user: "jon", text: "search reindex finished overnight ✅" },
@@ -251,13 +255,13 @@ export const TOOLS: ToolDef[] = [
     label: "Posting to Slack",
     description: "Post a message to a Slack channel. Requires approval.",
     input_schema: { type: "object", properties: { channel: { type: "string" }, text: { type: "string" } }, required: ["channel", "text"] },
-    isLive: () => !!env("SLACK_BOT_TOKEN"),
+    isLive: (ctx) => !!tok(ctx, "SLACK_BOT_TOKEN"),
     preview: (i) => [
       { label: "Channel", value: str(i.channel) },
       { label: "Message", value: str(i.text) },
     ],
-    run: async ({ channel, text }) => {
-      if (!env("SLACK_BOT_TOKEN")) return demo(`Posted to ${str(channel)} (demo)`, null);
+    run: async ({ channel, text }, ctx) => {
+      if (!tok(ctx, "SLACK_BOT_TOKEN")) return demo(`Posted to ${str(channel)} (demo)`, null);
       const id = await slackChannelId(str(channel));
       await slack("chat.postMessage", { channel: id, text: str(text) });
       return { ok: true, live: true, summary: `Posted to ${str(channel)}` };
@@ -287,10 +291,10 @@ export const TOOLS: ToolDef[] = [
       type: "object",
       properties: { repo: { type: "string", description: "owner/repo; defaults to the workspace repo" }, state: { type: "string", enum: ["open", "closed", "all"] } },
     },
-    isLive: () => !!(env("GITHUB_TOKEN") && env("GITHUB_REPO")),
-    run: async ({ repo, state }) => {
+    isLive: (ctx) => !!(tok(ctx, "GITHUB_TOKEN") && env("GITHUB_REPO")),
+    run: async ({ repo, state }, ctx) => {
       const r = str(repo) || env("GITHUB_REPO");
-      if (!env("GITHUB_TOKEN") || !r)
+      if (!tok(ctx, "GITHUB_TOKEN") || !r)
         return demo("9 PRs merged yesterday, 3 open", [
           { number: 482, title: "Checkout refactor", state: "merged", author: "maya" },
           { number: 488, title: "Billing v2", state: "open", author: "maya", age_days: 1 },
@@ -319,14 +323,14 @@ export const TOOLS: ToolDef[] = [
       properties: { repo: { type: "string" }, number: { type: "number" }, body: { type: "string" } },
       required: ["number", "body"],
     },
-    isLive: () => !!(env("GITHUB_TOKEN") && env("GITHUB_REPO")),
+    isLive: (ctx) => !!(tok(ctx, "GITHUB_TOKEN") && env("GITHUB_REPO")),
     preview: (i) => [
       { label: "Where", value: `${str(i.repo) || env("GITHUB_REPO") || "repo"} #${str(i.number)}` },
       { label: "Comment", value: str(i.body) },
     ],
-    run: async ({ repo, number, body }) => {
+    run: async ({ repo, number, body }, ctx) => {
       const r = str(repo) || env("GITHUB_REPO");
-      if (!env("GITHUB_TOKEN") || !r) return demo(`Commented on #${str(number)} (demo)`, null);
+      if (!tok(ctx, "GITHUB_TOKEN") || !r) return demo(`Commented on #${str(number)} (demo)`, null);
       const c = (await github(`/repos/${r}/issues/${Number(number)}/comments`, { method: "POST", body: JSON.stringify({ body: str(body) }) })) as { html_url: string };
       return { ok: true, live: true, summary: `Commented on ${r}#${str(number)}`, data: { url: c.html_url } };
     },
@@ -338,9 +342,9 @@ export const TOOLS: ToolDef[] = [
     label: "Querying Linear",
     description: "List recently updated Linear issues with state, assignee and priority.",
     input_schema: { type: "object", properties: { limit: { type: "number" } } },
-    isLive: () => !!env("LINEAR_API_KEY"),
-    run: async ({ limit }) => {
-      if (!env("LINEAR_API_KEY"))
+    isLive: (ctx) => !!tok(ctx, "LINEAR_API_KEY"),
+    run: async ({ limit }, ctx) => {
+      if (!tok(ctx, "LINEAR_API_KEY"))
         return demo("14 issues updated since yesterday", [
           { id: "ENG-412", title: "New onboarding empty states", state: "Blocked", assignee: "lee", days_in_state: 3 },
           { id: "ENG-405", title: "Billing v2 proration", state: "In Review", assignee: "maya" },
@@ -366,13 +370,13 @@ export const TOOLS: ToolDef[] = [
     label: "Creating Linear issue",
     description: "Create a Linear issue. Requires approval.",
     input_schema: { type: "object", properties: { title: { type: "string" }, description: { type: "string" } }, required: ["title"] },
-    isLive: () => !!env("LINEAR_API_KEY"),
+    isLive: (ctx) => !!tok(ctx, "LINEAR_API_KEY"),
     preview: (i) => [
       { label: "Title", value: str(i.title) },
       { label: "Description", value: str(i.description, "—") },
     ],
-    run: async ({ title, description }) => {
-      if (!env("LINEAR_API_KEY")) return demo(`Issue “${str(title)}” created (demo)`, null);
+    run: async ({ title, description }, ctx) => {
+      if (!tok(ctx, "LINEAR_API_KEY")) return demo(`Issue “${str(title)}” created (demo)`, null);
       let teamId = env("LINEAR_TEAM_ID");
       if (!teamId) teamId = (await linear<{ teams: { nodes: { id: string }[] } }>(`{ teams(first:1){ nodes{ id } } }`)).teams.nodes[0]?.id;
       if (!teamId) throw new Error("No Linear team found");

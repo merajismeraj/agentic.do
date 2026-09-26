@@ -77,8 +77,8 @@ export default function Onboarding() {
         brains: ais.map((id) => ({
           providerId: id,
           plan: PROVIDERS.find((p) => p.id === id)!.plans[0],
-          usage: 5 + Math.floor(Math.random() * 30),
-          resetsIn: "5d",
+          usage: 0,
+          resetsIn: "—",
           enabled: true,
           connectedAt: Date.now(),
         })),
@@ -189,7 +189,7 @@ export default function Onboarding() {
             <>
               <H
                 title="Bring the AI you already pay for."
-                sub="Connect as many subscriptions as you have. We pool them, route each task to the best model, and fail over when one hits its limit."
+                sub="Pick every AI you use. Your team pools them, routes each task to the best model, and fails over when one hits its limit. Right after setup you'll add an API key for each — it takes a minute."
               />
               <div className="grid gap-2.5 sm:grid-cols-2">
                 {PROVIDERS.map((p) => {
@@ -216,7 +216,7 @@ export default function Onboarding() {
               <p className="mt-4 text-sm text-muted">
                 {ais.length ? (
                   <>
-                    <span className="font-medium text-fg">{ais.length} connected.</span> Your team can now think with{" "}
+                    <span className="font-medium text-fg">{ais.length} selected.</span> Your team will think with{" "}
                     {ais.map((a) => PROVIDERS.find((p) => p.id === a)!.name).join(" + ")}.
                   </>
                 ) : (

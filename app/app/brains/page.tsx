@@ -20,7 +20,14 @@ const MODES: { value: State["routing"]; label: string; hint: string }[] = [
 const SAMPLES = ["Draft a reply to Priya about the contract", "Research what competitors launched this week", "Why is the checkout PR failing?"];
 
 export default function BrainsPage() {
-  const { state, update, live } = useStore();
+  const { state, update, live, mode, toast, refreshLive } = useStore();
+  const [replacing, setReplacing] = useState<ProviderId | null>(null);
+  const account = mode === "account";
+  const removeKey = async (id: ProviderId) => {
+    const res = await fetch(`/api/ai-keys/${id}`, { method: "DELETE" });
+    await refreshLive();
+    toast(res.ok ? `${providerById(id).name} key removed` : "Couldn't remove the key");
+  };
   const liveCount = state.brains.filter((b) => live?.providers[b.providerId]?.live).length;
   const [connecting, setConnecting] = useState<ProviderId | null>(null);
   const connected = new Set(state.brains.map((b) => b.providerId));
@@ -37,21 +44,24 @@ export default function BrainsPage() {
         <Card className={cn("mb-6 flex items-start gap-3 p-4 text-sm", liveCount ? "border-ok/30 bg-ok-soft/40" : "border-warn/30 bg-warn-soft/40")}>
           <KeyRound size={16} className={cn("mt-0.5 shrink-0", liveCount ? "text-ok" : "text-warn")} />
           <div className="leading-relaxed">
-            {liveCount ? (
+            {!account ? (
               <>
-                <span className="font-medium">{liveCount} of {state.brains.length} accounts run live.</span> The rest run in demo mode until an API key is added.
+                <span className="font-medium">This is the demo</span>, so every run is simulated. Create an account and add an API key to run for real.
+              </>
+            ) : liveCount ? (
+              <>
+                <span className="font-medium">
+                  {liveCount} of {state.brains.length} accounts run live.
+                </span>{" "}
+                {liveCount < state.brains.length ? "Add an API key to the others to use them too." : "Everything in your pool can do real work."}
               </>
             ) : (
               <>
-                <span className="font-medium">Teammates are running in demo mode.</span> Chat subscriptions can't be called by other apps, so live runs use each
-                provider's API key.
+                <span className="font-medium">Add an API key to run for real.</span> Chat subscriptions like ChatGPT Plus or Claude Pro can't be used by other
+                apps, so teammates use each provider's API key. Until then, runs are simulated and scheduled routines won't run.
               </>
-            )}{" "}
-            Set <code className="rounded bg-surface-2 px-1 font-mono text-xs">ANTHROPIC_API_KEY</code>,{" "}
-            <code className="rounded bg-surface-2 px-1 font-mono text-xs">OPENAI_API_KEY</code>,{" "}
-            <code className="rounded bg-surface-2 px-1 font-mono text-xs">GEMINI_API_KEY</code>,{" "}
-            <code className="rounded bg-surface-2 px-1 font-mono text-xs">XAI_API_KEY</code>… in <code className="rounded bg-surface-2 px-1 font-mono text-xs">.env.local</code> (see{" "}
-            <code className="rounded bg-surface-2 px-1 font-mono text-xs">.env.example</code>).
+            )}
+            {account && live.sharedKeys && <span className="text-muted"> This account may also use the server's shared keys.</span>}
           </div>
         </Card>
       )}
@@ -127,35 +137,74 @@ export default function BrainsPage() {
                       ))}
                     </select>
                   </div>
-                  <div className="flex items-center gap-1.5 text-xs text-muted">
+                  <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted">
                     {live?.providers[p.id]?.live ? (
                       <>
                         <Badge tone="ok">Live</Badge> {live.providers[p.id].model}
+                        <span>
+                          · {live.providers[p.id].key?.source === "shared" ? "shared server key" : "your key"}{" "}
+                          <span className="font-mono">{live.providers[p.id].key?.hint}</span>
+                        </span>
                       </>
                     ) : (
                       <>
-                        {live && <Badge>Demo</Badge>} {p.models.join(" · ")}
+                        {live && <Badge>{account && !live.providers[p.id]?.liveCapable ? "No API" : "Demo"}</Badge>} {p.models.join(" · ")}
                       </>
                     )}
                   </div>
                 </div>
                 <Switch label="Use in pool" checked={b.enabled} onChange={(v) => set({ enabled: v })} />
               </div>
-              <div className="mt-4">
-                <div className="mb-1.5 flex justify-between text-xs">
-                  <span className="text-muted">Plan limit used</span>
-                  <span className={cn("font-medium tabular-nums", b.usage >= 90 && "text-danger")}>
-                    {b.usage}% · resets in {b.resetsIn}
-                  </span>
+              {account ? (
+                (() => {
+                  const info = live?.providers[p.id];
+                  if (info && !info.liveCapable)
+                    return <p className="mt-4 text-xs text-muted">{p.name} has no public API yet, so routing skips it.</p>;
+                  if (info?.live)
+                    return (
+                      <div className="mt-4 flex items-center gap-2 text-xs">
+                        <span className="text-muted">Usage tracking is coming soon.</span>
+                        {info.key?.source === "workspace" && (
+                          <span className="ml-auto flex gap-1">
+                            <Button size="sm" variant="ghost" onClick={() => setReplacing(p.id)}>
+                              Replace key
+                            </Button>
+                            <Button size="sm" variant="ghost" onClick={() => removeKey(p.id)}>
+                              Remove key
+                            </Button>
+                          </span>
+                        )}
+                      </div>
+                    );
+                  return (
+                    <div className="mt-4 flex items-center gap-3 rounded-lg bg-warn-soft/60 px-3 py-2 text-xs text-warn">
+                      Simulated until you add an API key.
+                      <Button size="sm" variant="soft" className="ml-auto" onClick={() => setConnecting(p.id)}>
+                        <KeyRound size={13} /> Add API key
+                      </Button>
+                    </div>
+                  );
+                })()
+              ) : (
+                <div className="mt-4">
+                  <div className="mb-1.5 flex justify-between text-xs">
+                    <span className="text-muted">Plan limit used</span>
+                    <span className={cn("font-medium tabular-nums", b.usage >= 90 && "text-danger")}>
+                      {b.usage}% · resets in {b.resetsIn}
+                    </span>
+                  </div>
+                  <Meter value={b.usage} />
                 </div>
-                <Meter value={b.usage} />
-              </div>
+              )}
               <div className="mt-4 flex items-center gap-1.5">
                 {p.strengths.map((s) => (
                   <Badge key={s}>{s}</Badge>
                 ))}
                 <button
-                  onClick={() => update((s) => ({ ...s, brains: s.brains.filter((x) => x.providerId !== b.providerId) }))}
+                  onClick={async () => {
+                    update((s) => ({ ...s, brains: s.brains.filter((x) => x.providerId !== b.providerId) }));
+                    if (account && live?.providers[b.providerId]?.key?.source === "workspace") await removeKey(b.providerId);
+                  }}
                   className="ml-auto flex items-center gap-1 rounded-md px-1.5 py-1 text-xs text-muted hover:bg-danger-soft hover:text-danger"
                 >
                   <Unplug size={12} /> Disconnect
@@ -192,6 +241,7 @@ export default function BrainsPage() {
       )}
 
       <ConnectBrain id={connecting} onClose={() => setConnecting(null)} />
+      <ConnectBrain id={replacing} replace onClose={() => setReplacing(null)} />
     </div>
   );
 }

@@ -12,8 +12,12 @@ import { useStore } from "@/lib/store";
 import { ago, clock, cn, greeting } from "@/lib/utils";
 
 export default function Home() {
-  const { state } = useStore();
+  const { state, mode, live } = useStore();
   const router = useRouter();
+  const demo = mode !== "account";
+  const weekAgo = Date.now() - 7 * 86_400_000;
+  const doneThisWeek = state.activity.filter((a) => a.at >= weekAgo).length;
+  const liveBrains = state.brains.filter((b) => b.enabled && live?.providers[b.providerId]?.live).length;
   const pending = state.approvals.filter((a) => a.status === "pending");
   const first = state.user.name.split(" ")[0];
   const now = new Date();
@@ -54,10 +58,24 @@ export default function Home() {
       />
 
       <div className="mt-8 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Stat icon={<Clock size={15} />} label="Hours saved this week" value="11.5h" delta="+2.3h" />
-        <Stat icon={<CheckCircle2 size={15} />} label="Tasks completed" value={String(done + 37)} delta="+18%" />
+        {demo ? (
+          <>
+            {/* Sample figures for the demo workspace. */}
+            <Stat icon={<Clock size={15} />} label="Hours saved this week" value="11.5h" delta="+2.3h" />
+            <Stat icon={<CheckCircle2 size={15} />} label="Tasks completed" value={String(done + 37)} delta="+18%" />
+          </>
+        ) : (
+          <>
+            <Stat icon={<CheckCircle2 size={15} />} label="Done this week" value={String(doneThisWeek)} hint="runs & actions" />
+            <Stat icon={<Clock size={15} />} label="Waiting on you" value={String(pending.length)} hint={pending.length === 1 ? "approval" : "approvals"} />
+          </>
+        )}
         <Stat icon={<Sparkles size={15} />} label="Active teammates" value={`${state.agents.filter((a) => a.status !== "paused").length}/${state.agents.length}`} />
-        <Stat icon={<Gauge size={15} />} label="AI capacity used" value={`${avgUsage}%`} hint={`across ${state.brains.length} subscriptions`} />
+        {demo ? (
+          <Stat icon={<Gauge size={15} />} label="AI capacity used" value={`${avgUsage}%`} hint={`across ${state.brains.length} subscriptions`} />
+        ) : (
+          <Stat icon={<Gauge size={15} />} label="Live AI accounts" value={`${liveBrains}/${state.brains.length}`} hint={liveBrains ? "running for real" : "add an API key"} />
+        )}
       </div>
 
       <div className="mt-8 grid gap-8 lg:grid-cols-[1fr_340px]">
@@ -136,7 +154,34 @@ export default function Home() {
           </section>
 
           <section>
-            <SectionHead title="AI capacity" href="/app/brains" />
+            <SectionHead title={demo ? "AI capacity" : "AI accounts"} href="/app/brains" />
+            {!demo ? (
+              <Card className="divide-y divide-line">
+                {state.brains.map((b) => {
+                  const info = live?.providers[b.providerId];
+                  return (
+                    <Link key={b.providerId} href="/app/brains" className={cn("flex items-center gap-2 px-4 py-3 text-sm hover:bg-surface-2", !b.enabled && "opacity-40")}>
+                      <ProviderLogo id={b.providerId} size={18} className="rounded-md" />
+                      <span className="font-medium">{providerById(b.providerId).name}</span>
+                      <span className="ml-auto text-xs">
+                        {info?.live ? (
+                          <span className="text-ok">Live</span>
+                        ) : info && !info.liveCapable ? (
+                          <span className="text-muted">No API</span>
+                        ) : (
+                          <span className="text-warn">Add API key</span>
+                        )}
+                      </span>
+                    </Link>
+                  );
+                })}
+                {!state.brains.length && (
+                  <Link href="/app/brains" className="block px-4 py-3 text-sm text-accent hover:underline">
+                    Connect an AI account →
+                  </Link>
+                )}
+              </Card>
+            ) : (
             <Card className="space-y-3.5 p-4">
               {state.brains.map((b) => (
                 <div key={b.providerId} className={cn(!b.enabled && "opacity-40")}>
@@ -156,6 +201,7 @@ export default function Home() {
                 </p>
               )}
             </Card>
+            )}
           </section>
         </aside>
       </div>

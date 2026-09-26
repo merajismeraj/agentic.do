@@ -44,6 +44,7 @@ Global: `⌘K` command palette (navigate or delegate in one line), light/dark th
 - `lib/server/db.ts` — Postgres (`DATABASE_URL`) or embedded PGlite; schema bootstrapped on start
 - `lib/server/auth.ts` — accounts (scrypt), sessions (hashed tokens), same-origin checks
 - `lib/server/workspace.ts` — workspace document, messages, approvals, activity, encrypted connections
+- `lib/server/keys.ts` — which credentials a workspace may use: its own AI keys, plus server-wide ones only where `SHARED_AI_KEYS` allows
 - `lib/seed.ts` — empty and demo workspaces
 - `lib/server/run.ts` — run orchestrator: routing, failover, tool loop, approval gate, NDJSON events
 - `lib/server/providers.ts` — Anthropic SDK adapter + OpenAI-compatible adapter (OpenAI, Gemini, xAI, Mistral, DeepSeek, Perplexity)
@@ -54,7 +55,7 @@ Global: `⌘K` command palette (navigate or delegate in one line), light/dark th
 - `lib/server/notify.ts` + `lib/server/mailer.ts` — email alert outbox (dedupe, grouping, retries) and Resend delivery
 - `scripts/supabase-cron.mts` — installs the Supabase `pg_cron` job (secret in Vault)
 - `lib/server/google.ts` + `lib/server/seal.ts` — Google sign-in and Gmail/Calendar connection, AES-256-GCM sealing
-- API: `auth/{signup,login,logout}` · `auth/google/{start,callback}` · `me` · `workspace` · `run` · `approvals/[id]` · `connections/google` · `status` · `cron/tick` · `notifications/test`
+- API: `auth/{signup,login,logout}` · `auth/google/{start,callback}` · `me` · `workspace` · `run` · `approvals/[id]` · `connections/google` · `status` · `cron/tick` · `notifications/test` · `ai-keys/[provider]`
 
 ## Accounts and data
 
@@ -100,7 +101,13 @@ Setup: create a [Resend](https://resend.com) API key, verify your sending domain
 
 ## Execution
 
-Copy `.env.example` to `.env.local` and add keys. Chat subscriptions (ChatGPT Plus, Claude Pro, …) can't be called by third‑party apps, so **live runs use each provider's API key**. Anything without a key keeps working in demo mode, and the UI labels each run **Live** or **Demo**.
+Chat subscriptions (ChatGPT Plus, Claude Pro, …) can't be called by third‑party apps, so **live runs use each provider's API key**. Anything without a key keeps working in demo mode, and the UI labels each run **Live** or **Demo**.
+
+### Whose keys
+
+- **Each workspace brings its own.** Add a key under **AI accounts → Add API key**. The server checks it with the provider before saving (OpenAI, Anthropic, Gemini, xAI, Mistral and DeepSeek; Perplexity has no check endpoint, so a bad key shows up on the first run). Keys are stored per workspace, encrypted with AES-256-GCM, and never sent back to the browser; the UI shows only the last four characters. Runs, scheduled runs and approvals all use the workspace's own keys.
+- **The operator's keys are opt-in.** The provider keys and Slack, GitHub and Linear tokens in the server's environment are only used for accounts allowed by `SHARED_AI_KEYS`: `all` for a single-user or self-hosted setup, a comma-separated list of emails (e.g. just yours), or unset/`off` so everyone brings their own. A workspace's own key always takes priority.
+- Accounts without a live key see a clear "Add API key" prompt. Their chat runs are simulated and labelled **Demo**, and their scheduled routines fail with that reason. Nothing falls through to someone else's key, and the tests check the actual `Authorization` header to prove it.
 
 How a run works:
 
@@ -125,10 +132,12 @@ What teammates can do with it: search mail (Gmail query syntax), read a day's ca
 
 Before a public launch: `gmail.readonly` and `gmail.send` are restricted scopes, so Google requires app verification and a third-party security assessment. Until then, only test users can connect.
 
-`npm test` runs the schedule unit tests plus 25 end-to-end checks against the real route handlers: accounts, sessions, rate limits, cross-site blocking, workspace versioning, persisted runs, approval tampering and double-execution, cross-account isolation, demo lockdown, the Google sign-in, connect, refresh and send paths, and the scheduler (exactly-once under concurrency, timezone, catch-up window, paused teammates, no fabricated runs, cron auth, Run now), and email alerts (grouping, dedupe, escaping, retries, preferences).
+`npm test` runs the schedule unit tests plus 28 end-to-end checks against the real route handlers: accounts, sessions, rate limits, cross-site blocking, workspace versioning, persisted runs, approval tampering and double-execution, cross-account isolation, demo lockdown, the Google sign-in, connect, refresh and send paths, and the scheduler (exactly-once under concurrency, timezone, catch-up window, paused teammates, no fabricated runs, cron auth, Run now), email alerts (grouping, dedupe, escaping, retries, preferences), and per-workspace keys (verification, encryption, isolation, never returned).
 
 **Before production:**
-- AI provider keys and the Slack, GitHub and Linear tokens are still **server-wide**, so every account uses them. Give each workspace its own keys before inviting other people.
+- Leave `SHARED_AI_KEYS` unset (or list only your own email) before letting others sign up.
+- Slack, GitHub and Linear still only have server-wide tokens (shared accounts only). Per-workspace OAuth for them is still to do.
+- Plan-usage meters aren't tracked for real accounts yet, so routing weighs fit rather than remaining quota.
 - The login rate limiter is in-memory, so it's per instance. Use Redis or Upstash when running more than one.
 - There's no email verification or password reset yet.
 - The scheduler scans every workspace on each tick. That's fine for thousands of workspaces; beyond that, store the next run time and index it.

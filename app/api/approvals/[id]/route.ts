@@ -1,5 +1,6 @@
 import { errorResponse, HttpError, requireUser } from "@/lib/server/auth";
 import { googleAuthFor } from "@/lib/server/google";
+import { accessFor } from "@/lib/server/keys";
 import { toolByName } from "@/lib/server/tools";
 import { claimApproval, getApproval, logActivity, requireWorkspace, setApprovalResult } from "@/lib/server/workspace";
 import type { Approval } from "@/lib/types";
@@ -52,7 +53,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       return Response.json({ status: "approved", ok: true, live: false, result: "Done", preview });
     }
 
-    const ctx = { google: await googleAuthFor(ws.id), timeZone: ws.doc.user.timezone || "UTC" };
+    const ctx = { google: await googleAuthFor(ws.id), timeZone: ws.doc.user.timezone || "UTC", shared: (await accessFor(ws)).shared };
     try {
       const r = await tool.run(a.call.input, ctx);
       await setApprovalResult(ws.id, id, r.summary);
