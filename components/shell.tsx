@@ -25,6 +25,7 @@ import { useStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { CommandPalette } from "./command-palette";
 import { HireAgent } from "./hire-agent";
+import { VerifyBanner } from "./verify-banner";
 import { AgentAvatar, Kbd, Logo } from "./ui";
 
 const HIRE_EVENT = "agentic:hire";
@@ -215,6 +216,7 @@ export function Shell({ children }: { children: ReactNode }) {
             <Search size={18} />
           </button>
         </header>
+        <VerifyBanner />
         <main className="mx-auto w-full max-w-6xl px-4 pt-6 pb-24 sm:px-8 sm:pt-10">{children}</main>
       </div>
 

@@ -23,6 +23,7 @@ interface Account {
   id: string;
   email: string;
   name: string;
+  emailVerified?: boolean;
 }
 
 interface Store {

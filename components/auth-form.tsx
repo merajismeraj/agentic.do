@@ -112,7 +112,14 @@ export function AuthForm({ kind }: { kind: "login" | "signup" }) {
               />
             </label>
             <label className="block">
-              <span className="mb-1.5 block text-[13px] font-medium">Password</span>
+              <span className="mb-1.5 flex items-center justify-between text-[13px] font-medium">
+                Password
+                {!isSignup && (
+                  <Link href="/forgot-password" className="font-normal text-muted hover:text-fg hover:underline">
+                    Forgot password?
+                  </Link>
+                )}
+              </span>
               <span className="relative block">
                 <input
                   className={cn(input, "h-11 pr-10 text-[15px]")}

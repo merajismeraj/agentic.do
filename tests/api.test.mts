@@ -571,6 +571,20 @@ process.env.RESEND_API_KEY = "re_test";
 process.env.EMAIL_FROM = "agentic.do <alerts@agentic.test>";
 process.env.APP_URL = "https://app.agentic.test/";
 assert.equal((await statusOf(alex)).email.configured, true);
+const verifyRoute = await route("app/api/auth/verify/route.ts");
+const resendRoute = await route("app/api/auth/verify/resend/route.ts");
+const linkIn = (text: string, page: string) => text.match(new RegExp(`${page}\\?token=([A-Za-z0-9_-]+)`))?.[1];
+// Alerts only go to confirmed addresses: Alex confirms through the real resend → link → verify flow.
+res = await notifyTest.POST(alex.req("/api/notifications/test", { method: "POST" }));
+assert.equal(res.status, 403, "unconfirmed email → no alerts");
+assert.equal((await resendRoute.POST(alex.req("/api/auth/verify/resend", { method: "POST" }))).status, 200);
+const verifyMail = JSON.parse(emails().at(-1)!.body!);
+assert.equal(verifyMail.subject, "Confirm your email for agentic.do");
+const alexToken = linkIn(verifyMail.text, "https://app.agentic.test/verify-email")!;
+assert.ok(alexToken && alexToken.length >= 40);
+assert.equal((await verifyRoute.POST(alex.req("/api/auth/verify", { method: "POST", body: { token: alexToken } }))).status, 200);
+assert.equal((await verifyRoute.POST(alex.req("/api/auth/verify", { method: "POST", body: { token: alexToken } }))).status, 400, "single use");
+assert.equal((await meOf(alex)).user.emailVerified, true);
 res = await notifyTest.POST(alex.req("/api/notifications/test", { method: "POST" }));
 assert.equal(res.status, 200);
 let mail = JSON.parse(emails().at(-1)!.body!);
@@ -636,6 +650,81 @@ assert.equal(mon2.alerts.emails, 0, "approval alerts switched off → no email")
 res = await workspace.PUT(alex.req("/api/workspace", { method: "PUT", body: { doc: { ...doc(), notifications: { approvals: "yes" } }, baseVersion: (await meOf(alex)).workspace.version } }));
 assert.equal(res.status, 400);
 ok("failure alerts retry through provider errors; alert preferences are respected and validated");
+
+/* ---------------------------- account emails --------------------------- */
+
+const forgot = await route("app/api/auth/forgot/route.ts");
+const reset = await route("app/api/auth/reset/route.ts");
+
+// Sign-up sends a confirmation link; expired links don't work.
+const rita = new Browser();
+rita.take(await signup.POST(rita.req("/api/auth/signup", { method: "POST", body: { email: "rita@acme.com", password: "rita's first password", name: "Rita" } })));
+let ritaMail = JSON.parse(emails().at(-1)!.body!);
+assert.deepEqual(ritaMail.to, ["rita@acme.com"]);
+assert.ok(ritaMail.html.includes("https://app.agentic.test/verify-email?token="));
+assert.equal((await meOf(rita)).user.emailVerified, false);
+const ritaToken = linkIn(ritaMail.text, "https://app.agentic.test/verify-email")!;
+const dbc = await (await route("lib/server/db.ts")).db();
+await dbc.query("update auth_tokens set expires_at = now() - interval '1 minute' where purpose = 'verify'");
+assert.equal((await verifyRoute.POST(rita.req("/api/auth/verify", { method: "POST", body: { token: ritaToken } }))).status, 400, "expired");
+assert.equal((await verifyRoute.POST(rita.req("/api/auth/verify", { method: "POST", body: { token: "x".repeat(43) } }))).status, 400, "unknown");
+const rawTokens = (await dbc.query("select id from auth_tokens")).rows.map((r: Any) => r.id);
+assert.ok(!rawTokens.includes(ritaToken), "only token hashes are stored");
+ok("sign-up sends a confirmation link; tokens are single-use, expire, and are stored hashed");
+
+// Forgot password: same answer whether or not the account exists.
+let mailCount = emails().length;
+res = await forgot.POST(new Browser().req("/api/auth/forgot", { method: "POST", body: { email: "nobody@nowhere.io" } }));
+const unknownBody = await res.json();
+assert.equal(res.status, 200);
+assert.equal(emails().length, mailCount, "no email for unknown accounts");
+res = await forgot.POST(new Browser().req("/api/auth/forgot", { method: "POST", body: { email: "RITA@acme.com" } }));
+assert.deepEqual(await res.json(), unknownBody, "identical response — no account enumeration");
+ritaMail = JSON.parse(emails().at(-1)!.body!);
+assert.equal(ritaMail.subject, "Reset your agentic.do password");
+const resetToken = linkIn(ritaMail.text, "https://app.agentic.test/reset-password")!;
+ok("forgot password never reveals whether an account exists");
+
+const ritaPhone = new Browser();
+ritaPhone.take(await login.POST(ritaPhone.req("/api/auth/login", { method: "POST", body: { email: "rita@acme.com", password: "rita's first password" } })));
+assert.equal((await reset.POST(new Browser().req("/api/auth/reset", { method: "POST", body: { token: resetToken, password: "short" } }))).status, 400);
+const fresh = new Browser();
+res = fresh.take(await reset.POST(fresh.req("/api/auth/reset", { method: "POST", body: { token: resetToken, password: "rita's brand new password" } })));
+assert.equal(res.status, 200);
+assert.equal((await meOf(fresh)).user.email, "rita@acme.com", "signed in on this device");
+assert.equal((await meOf(fresh)).user.emailVerified, true, "a reset proves the inbox");
+assert.equal((await me.GET(rita.req("/api/me"))).status, 401, "other sessions signed out");
+assert.equal((await me.GET(ritaPhone.req("/api/me"))).status, 401);
+assert.equal((await reset.POST(new Browser().req("/api/auth/reset", { method: "POST", body: { token: resetToken, password: "another new password!" } }))).status, 400, "single use");
+assert.equal((await login.POST(new Browser().req("/api/auth/login", { method: "POST", body: { email: "rita@acme.com", password: "rita's first password" } }))).status, 401);
+assert.equal((await login.POST(new Browser().req("/api/auth/login", { method: "POST", body: { email: "rita@acme.com", password: "rita's brand new password" } }))).status, 200);
+ok("password reset: new password works, old one and all other sessions are gone, link is single-use");
+
+// Pre-hijacking: someone registers the victim's email first; the victim later signs in with Google.
+const squatter = new Browser();
+squatter.take(await signup.POST(squatter.req("/api/auth/signup", { method: "POST", body: { email: "victim@corp.io", password: "squatter's password", name: "Not Victim" } })));
+assert.equal((await me.GET(squatter.req("/api/me"))).status, 200);
+nextIdentity = { sub: "g-victim", email: "victim@corp.io", name: "Victim", email_verified: true };
+const victim = new Browser();
+await googleLogin(victim);
+assert.equal((await meOf(victim)).user.email, "victim@corp.io");
+assert.equal((await meOf(victim)).user.emailVerified, true);
+assert.equal((await me.GET(squatter.req("/api/me"))).status, 401, "squatter's session ended");
+assert.equal((await login.POST(new Browser().req("/api/auth/login", { method: "POST", body: { email: "victim@corp.io", password: "squatter's password" } }))).status, 401, "squatter's password wiped");
+ok("a verified Google sign-in takes back an unconfirmed account: old password and sessions are wiped");
+
+// Alerts to unconfirmed addresses are dropped, not sent.
+const { enqueueNotification, flushNotifications: flush2 } = await route("lib/server/notify.ts");
+const uma = new Browser();
+uma.take(await signup.POST(uma.req("/api/auth/signup", { method: "POST", body: { email: "uma@acme.com", password: "uma's long password", name: "Uma" } })));
+await workspace.PUT(uma.req("/api/workspace", { method: "PUT", body: { doc: doc(), baseVersion: null } }));
+const umaIds = (await dbc.query("select u.id as uid, w.id as wid from users u join workspaces w on w.owner_id = u.id where u.email = 'uma@acme.com'")).rows[0];
+assert.equal((await meOf(uma)).user.emailVerified, false);
+mailCount = emails().length;
+await enqueueNotification({ userId: umaIds.uid, workspaceId: umaIds.wid, kind: "test", dedupeKey: "unverified-test", payload: {} });
+assert.deepEqual(await flush2(), { emails: 0, sent: 0, failed: 0 });
+assert.equal(emails().length, mailCount);
+ok("alerts are never sent to unconfirmed addresses");
 
 console.log("\nALL API TESTS PASSED");
 process.exit(0);

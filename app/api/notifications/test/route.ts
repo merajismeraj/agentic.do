@@ -12,6 +12,7 @@ export async function POST(req: Request) {
     const user = await requireUser(req);
     const ws = await requireWorkspace(user.id);
     if (!emailConfigured()) throw new HttpError(503, "Email isn't configured on this server yet");
+    if (!user.emailVerified) throw new HttpError(403, "Confirm your email first — alerts only go to verified addresses");
     if (limited(`test-email:${user.id}:${clientIp(req)}`, 3, 10 * 60_000)) throw new HttpError(429, "Test email already sent — check your inbox (and spam)");
     await enqueueNotification({ userId: user.id, workspaceId: ws.id, kind: "test", dedupeKey: `test:${newId()}`, payload: {} });
     const r = await flushNotifications({ userId: user.id });

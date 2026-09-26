@@ -69,6 +69,13 @@ export async function flushNotifications(opts: { userId?: string } = {}): Promis
     return result;
   }
 
+  // Alerts only go to confirmed addresses (so nobody can point them at someone else's inbox).
+  await d.query(
+    `update notifications n set attempts = $1, last_error = 'Email address not verified'
+     from users u where u.id = n.user_id and u.email_verified_at is null and n.sent_at is null and n.attempts < $1 ${opts.userId ? "and n.user_id = $2" : ""}`,
+    opts.userId ? [MAX_ATTEMPTS, opts.userId] : [MAX_ATTEMPTS],
+  );
+
   const { rows } = await d.query<Row>(
     `with claimed as (
        update notifications set claimed_at = now(), attempts = attempts + 1

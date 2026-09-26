@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, Loader2, Mail, Send } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Loader2, Mail, Send } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { Field, input } from "@/components/agent-config";
@@ -41,6 +41,11 @@ export default function SettingsPage() {
   };
 
   const emailReady = !!live?.email.configured;
+  const resendVerification = async () => {
+    const res = await fetch("/api/auth/verify/resend", { method: "POST" }).catch(() => null);
+    const body = ((await res?.json().catch(() => ({}))) ?? {}) as { error?: string; to?: string };
+    toast(res?.ok ? `Sent — check ${account?.email}` : (body.error ?? "Couldn't send"));
+  };
 
   return (
     <div className="mx-auto max-w-2xl">
@@ -80,10 +85,23 @@ export default function SettingsPage() {
         <h2 className="mb-1 text-[15px] font-semibold">Email alerts</h2>
         <p className="mb-3 text-sm text-muted">For work that happens while you're away. Things you start yourself show up in the app, not your inbox.</p>
         <Card className="divide-y divide-line">
-          <div className="flex items-center gap-3 px-5 py-4 text-sm">
+          <div className="flex flex-wrap items-center gap-3 px-5 py-4 text-sm">
             <Mail size={16} className="text-muted" />
             <span className="text-muted">Sent to</span>
             <span className="font-medium">{mode === "account" ? account?.email : "your account email"}</span>
+            {mode === "account" &&
+              (account?.emailVerified ? (
+                <span className="inline-flex items-center gap-1 text-xs text-ok">
+                  <CheckCircle2 size={13} /> Confirmed
+                </span>
+              ) : (
+                <span className="ml-auto flex items-center gap-2 text-xs">
+                  <span className="text-warn">Not confirmed — alerts are paused</span>
+                  <Button size="sm" variant="soft" onClick={resendVerification}>
+                    Resend link
+                  </Button>
+                </span>
+              ))}
           </div>
           <Toggle
             title="A scheduled run needs my approval"
@@ -100,6 +118,8 @@ export default function SettingsPage() {
                   Create one
                 </Link>
               </p>
+            ) : emailReady && !account?.emailVerified ? (
+              <p className="text-sm text-muted">Confirm your email above to turn alerts on.</p>
             ) : emailReady ? (
               <Button size="sm" onClick={sendTest} disabled={sending}>
                 {sending ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />} Send test email

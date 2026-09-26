@@ -21,6 +21,18 @@ create table if not exists users (
   created_at timestamptz not null default now()
 );
 
+alter table users add column if not exists email_verified_at timestamptz;
+
+create table if not exists auth_tokens (
+  id text primary key,               -- sha256 of the emailed token
+  user_id text not null references users(id) on delete cascade,
+  purpose text not null,             -- 'verify' | 'reset'
+  expires_at timestamptz not null,
+  used_at timestamptz,
+  created_at timestamptz not null default now()
+);
+create index if not exists auth_tokens_user on auth_tokens(user_id, purpose);
+
 create table if not exists sessions (
   id text primary key,               -- sha256 of the cookie token
   user_id text not null references users(id) on delete cascade,

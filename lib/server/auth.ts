@@ -16,6 +16,7 @@ export interface User {
   id: string;
   email: string;
   name: string;
+  emailVerified?: boolean;
 }
 
 export const newId = (bytes = 12) => randomBytes(bytes).toString("base64url");
@@ -77,7 +78,7 @@ export async function currentUser(req: Request): Promise<User | null> {
   const token = readCookie(req, SESSION_COOKIE);
   if (!token) return null;
   const { rows } = await (await db()).query<User>(
-    `select u.id, u.email, u.name from sessions s join users u on u.id = s.user_id
+    `select u.id, u.email, u.name, (u.email_verified_at is not null) as "emailVerified" from sessions s join users u on u.id = s.user_id
      where s.id = $1 and s.expires_at > now()`,
     [sha256(token)],
   );
@@ -152,8 +153,13 @@ export async function upsertGoogleUser(p: { sub: string; email: string; name: st
   const existing = await findUserByEmail(p.email);
   if (existing) {
     if (!p.emailVerified) throw new HttpError(409, "This Google email isn't verified, so it can't be linked to your existing account");
+    const { claimUnverifiedAccount, markVerified } = await import("./account");
+    await claimUnverifiedAccount(existing.id);
     await d.query("update users set google_sub = $1 where id = $2", [p.sub, existing.id]);
+    await markVerified(existing.id);
     return { id: existing.id, email: existing.email, name: existing.name };
   }
-  return createUser(p.email, p.name, undefined, p.sub);
+  const user = await createUser(p.email, p.name, undefined, p.sub);
+  if (p.emailVerified) await (await import("./account")).markVerified(user.id);
+  return user;
 }

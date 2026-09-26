@@ -43,6 +43,7 @@ Global: `⌘K` command palette (navigate or delegate in one line), light/dark th
 - `lib/store.tsx` — client store: account mode (server-synced, versioned) or demo mode (browser-only)
 - `lib/server/db.ts` — Postgres (`DATABASE_URL`) or embedded PGlite; schema bootstrapped on start
 - `lib/server/auth.ts` — accounts (scrypt), sessions (hashed tokens), same-origin checks
+- `lib/server/account.ts` — email confirmation and password reset (single-use hashed tokens, emails, pre-hijack protection)
 - `lib/server/workspace.ts` — workspace document, messages, approvals, activity, encrypted connections
 - `lib/server/keys.ts` — which credentials a workspace may use: its own AI keys, plus server-wide ones only where `SHARED_AI_KEYS` allows
 - `lib/seed.ts` — empty and demo workspaces
@@ -55,12 +56,16 @@ Global: `⌘K` command palette (navigate or delegate in one line), light/dark th
 - `lib/server/notify.ts` + `lib/server/mailer.ts` — email alert outbox (dedupe, grouping, retries) and Resend delivery
 - `scripts/supabase-cron.mts` — installs the Supabase `pg_cron` job (secret in Vault)
 - `lib/server/google.ts` + `lib/server/seal.ts` — Google sign-in and Gmail/Calendar connection, AES-256-GCM sealing
-- API: `auth/{signup,login,logout}` · `auth/google/{start,callback}` · `me` · `workspace` · `run` · `approvals/[id]` · `connections/google` · `status` · `cron/tick` · `notifications/test` · `ai-keys/[provider]`
+- API: `auth/{signup,login,logout,verify,verify/resend,forgot,reset}` · `auth/google/{start,callback}` · `me` · `workspace` · `run` · `approvals/[id]` · `connections/google` · `status` · `cron/tick` · `notifications/test` · `ai-keys/[provider]`
 
 ## Accounts and data
 
 - **Sign-in:** email + password (scrypt, 10+ chars, rate-limited) or **Sign in with Google** (identity scopes only). A Google login links to an existing account only when Google says the email is verified.
 - **Sessions:** a random 256-bit token in an httpOnly, SameSite=Lax cookie; the database stores only its SHA-256. Writes also require a same-origin `Origin` header.
+- **Email confirmation:** sign-up emails a confirmation link. Alerts and test emails only go to confirmed addresses, so nobody can point them at an inbox they don't own. Unconfirmed users see a banner with **Resend link**, and Settings shows the status. Google sign-ins with a Google-verified email count as confirmed.
+- **Password reset:** **Forgot password?** emails a link that works once and for one hour. The response is identical whether or not the account exists, so it can't be used to discover accounts. Setting a new password signs out every other session, invalidates other reset links, and confirms the email. The emailed token is removed from the address bar as soon as the page opens.
+- **Tokens:** confirmation and reset tokens are 256-bit random values. Only their SHA-256 is stored, each is single-use, and requesting a new one invalidates the old one. The pages POST the token, so email link scanners don't use it up.
+- **Pre-hijacking protection:** if someone registers an email they don't own and the real owner later signs in with Google (verified email), the old password and every session are wiped before the account is handed over.
 - **Workspace:** teammates, routines, AI accounts, context and profile are one versioned document per account. Every save sends the version it was based on, so two tabs can't silently overwrite each other; the loser gets the latest copy.
 - **Server-authoritative:** messages, approvals and activity are written by the server. A run takes only `agentId` + `text` from the browser; the teammate's tools, prompt, AI accounts and memory are loaded from the database. Approving executes the stored action; the browser can edit only the text fields that tool declares editable, and an action can't execute twice.
 - **Demo:** signed-out visitors get a browser-only sample workspace. `/api/run` simulates it without calling any model or tool, so the demo can't spend your API credit.
@@ -132,13 +137,12 @@ What teammates can do with it: search mail (Gmail query syntax), read a day's ca
 
 Before a public launch: `gmail.readonly` and `gmail.send` are restricted scopes, so Google requires app verification and a third-party security assessment. Until then, only test users can connect.
 
-`npm test` runs the schedule unit tests plus 28 end-to-end checks against the real route handlers: accounts, sessions, rate limits, cross-site blocking, workspace versioning, persisted runs, approval tampering and double-execution, cross-account isolation, demo lockdown, the Google sign-in, connect, refresh and send paths, and the scheduler (exactly-once under concurrency, timezone, catch-up window, paused teammates, no fabricated runs, cron auth, Run now), email alerts (grouping, dedupe, escaping, retries, preferences), and per-workspace keys (verification, encryption, isolation, never returned).
+`npm test` runs the schedule unit tests plus 33 end-to-end checks against the real route handlers: accounts, sessions, rate limits, cross-site blocking, workspace versioning, persisted runs, approval tampering and double-execution, cross-account isolation, demo lockdown, the Google sign-in, connect, refresh and send paths, and the scheduler (exactly-once under concurrency, timezone, catch-up window, paused teammates, no fabricated runs, cron auth, Run now), email alerts (grouping, dedupe, escaping, retries, preferences), per-workspace keys (verification, encryption, isolation, never returned), and account emails (confirmation, no-enumeration reset, session revocation, pre-hijack takeover).
 
 **Before production:**
 - Leave `SHARED_AI_KEYS` unset (or list only your own email) before letting others sign up.
 - Slack, GitHub and Linear still only have server-wide tokens (shared accounts only). Per-workspace OAuth for them is still to do.
 - Plan-usage meters aren't tracked for real accounts yet, so routing weighs fit rather than remaining quota.
 - The login rate limiter is in-memory, so it's per instance. Use Redis or Upstash when running more than one.
-- There's no email verification or password reset yet.
 - The scheduler scans every workspace on each tick. That's fine for thousands of workspaces; beyond that, store the next run time and index it.
 - Alerts are email only; Slack DMs would be a natural addition.
