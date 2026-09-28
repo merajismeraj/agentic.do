@@ -1,0 +1,92 @@
+# Agent analytics & verification
+
+Tells a site which AI agents act on it, whether they proved who they are, and whether they finish what they came to do. It tells agent builders where their agents are accepted, challenged or failing. Agents are treated as a customer channel, not as fraud.
+
+## How it decides
+
+Each session gets two independent answers:
+
+1. **Identity (trust tier)**, from the request. Agents sign each HTTP request with [Web Bot Auth](https://datatracker.ietf.org/wg/webbotauth/about/) (RFC 9421 HTTP Message Signatures, Ed25519).
+
+   | Tier | Name | Condition |
+   | --- | --- | --- |
+   | T0 | Unknown | No declaration; behaviour only |
+   | T1 | Declared | Self-declared automation (user agent), or a signature we can't vouch for |
+   | T2 | Signed | Valid signature, key in a trusted directory (ours or `AA_TRUSTED_DIRECTORIES`) |
+   | T3 | Registered | T2 + operator reviewed by a registry admin |
+   | T4 | Delegated | T3 + per-task delegation credential (reserved; not issued yet) |
+
+2. **Behaviour (P(agent))**, from the browser SDK. Each feature family contributes a bounded log-likelihood ratio (`lib/aa/scoring.ts`):
+   - time to first action vs words on the page (readers scale with length; agents with model latency)
+   - burstiness of interaction timing
+   - teleport clicks (no pointer approach), hover-before-click, off-screen and synthetic (`isTrusted=false`) clicks
+   - Fitts' law fit of approach time, pointer path straightness, keystroke rhythm, fields filled without typing, scroll jumps, `navigator.webdriver`
+
+   Labels: human below 0.2, agent above 0.8, otherwise uncertain; too little evidence is always uncertain. A two-state HMM over 10-second windows splits **hybrid** sessions, where a person hands off to an agent or takes control back.
+
+A verified identity outranks behaviour: a T2+ session counts as a verified agent whatever it looks like.
+
+**Policy:** behaviour never blocks. Screen readers, voice control and switch access can look agent-like. Default decisions are `allow`, `rate_limit` (over the agent's declared rate) or `challenge` (a failed signature: forged, replayed, expired or revoked).
+
+The LLR curves are hand-set in v0 and tested on synthetic sessions and live Playwright runs. Signed sessions are labelled agent data for free, so the next step is fitting and isotonic-calibrating these curves per site on real traffic.
+
+## Integrate a site
+
+1. **Agent analytics → Add site.** You get a public site key and a server secret, shown once.
+2. **Script on every page:**
+   ```html
+   <script src="https://YOUR_APP/aa.js" data-site="aa_pk_…" defer></script>
+   ```
+   3.8 KB. It records timings, pointer positions and counts, never keystroke values, form contents or page text.
+3. **Verify at your edge** (recommended). Forward each page request and embed the returned token as `data-vt` on the script tag, so the browser session inherits the verified identity:
+   ```ts
+   // Cloudflare Worker / Next.js proxy / any server
+   const r = await fetch("https://YOUR_APP/api/aa/verify", {
+     method: "POST",
+     headers: { authorization: `Bearer ${AA_SITE_SECRET}`, "content-type": "application/json" },
+     body: JSON.stringify({ method: req.method, url: req.url, headers: Object.fromEntries(req.headers), ip }),
+   });
+   const { tier, decision, agent, vt } = await r.json(); // decision: allow | rate_limit | challenge
+   ```
+   A site secret only verifies URLs on its own domain, because signatures are bound to `@authority`.
+4. **Report tasks:** `window.aa.task("checkout", "start" | "complete" | "fail")`.
+
+The built-in demo store at `/aa/demo/<site key>` does all of this server-side. Use it to see the loop work.
+
+## Register an agent
+
+**Agent registry → Register agent** generates an Ed25519 key pair in the browser. Only the public key is sent; the private JWK downloads once. New agents are T2 Signed. A reviewer in `AA_ADMIN_EMAILS` approves them to T3.
+
+- Directory (all active keys): `/.well-known/http-message-signatures-directory`
+- Per agent: `/r/<agent id>` (JWKS) and `/r/<agent id>/card` (Signature Agent Card)
+- Rotation: add a key, switch signing, revoke the old key. Revocation takes effect at once on this instance and within 30 s across instances.
+
+Try it:
+
+```bash
+npx tsx scripts/aa-agent.mts --key ./my-agent-private-key.json --registry http://localhost:3000 \
+  http://localhost:3000/aa/demo/<site key>
+```
+
+Builders see their agent's outcomes aggregated across sites: requests, sites reached, acceptance rate, why verification failed, and task success. Individual sites are never named.
+
+## Data & privacy
+
+- The SDK sends no content. IPs are stored only as a daily-rotating salted hash.
+- Raw behavioural batches are kept 30 days; session scores and aggregates are kept longer.
+- Nonces are single-use across instances (a Postgres unique key), and a forged request never consumes a real nonce.
+- Only directories in `AA_TRUSTED_DIRECTORIES` are ever fetched, so a request can't point us at arbitrary hosts (no SSRF).
+
+## Code map
+
+| Path | What |
+| --- | --- |
+| `lib/aa/verifier/` | RFC 9421 / Web Bot Auth sign + verify, JWK thumbprints, trust tiers, directory cache (runtime-agnostic WebCrypto) |
+| `lib/aa/scoring.ts` | Behavioural features, log-odds combiner, HMM segmenter |
+| `sdk/aa.ts` → `public/aa.js` | Browser SDK (`npm run sdk:build`, also run by `prebuild`) |
+| `lib/server/aa/` | Sites, registry, verification + tokens, ingest, stats, demo helpers |
+| `app/api/aa/*` | sites, agents, keys, review, collect (CORS, public), verify (site secret) |
+| `app/.well-known/…`, `app/r/…` | Public Web Bot Auth directories and agent cards |
+| `app/app/analytics/` | Site dashboard and agent registry UI |
+| `app/aa/demo/` | Demo store |
+| `tests/aa-*.mts` | Unit (incl. the RFC 9421 B.2.6 test vector) and end-to-end API tests |

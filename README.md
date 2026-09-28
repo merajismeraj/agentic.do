@@ -24,6 +24,8 @@ npm test                     # schedule + API suites (in-memory Postgres, mocked
 | AI accounts | `/app/brains` | Pool subscriptions, usage meters, routing mode, live routing preview, failover |
 | Integrations | `/app/integrations` | Connect tools; surfaces tools teammates are blocked on |
 | Context | `/app/memory` | Editable memory about you / team / company |
+| Agent analytics | `/app/analytics` | Which AI agents use your site, their trust tier (Web Bot Auth), human vs agent vs hybrid sessions, task success — see [docs/agent-analytics.md](docs/agent-analytics.md) |
+| Agent registry | `/app/analytics/agents` | Register agents, get Ed25519 keys + a public Web Bot Auth directory, see cross-site acceptance and failures |
 
 Global: `⌘K` command palette (navigate or delegate in one line), light/dark theme, mobile layout.
 

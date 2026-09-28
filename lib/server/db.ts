@@ -132,6 +132,99 @@ create table if not exists connections (
   updated_at timestamptz not null default now(),
   primary key (workspace_id, provider)
 );
+
+-- Agent analytics & verification (aa_*) ------------------------------------
+
+create table if not exists aa_sites (
+  id text primary key,
+  workspace_id text not null references workspaces(id) on delete cascade,
+  name text not null,
+  domain text not null,
+  site_key text not null unique,        -- public, used by the SDK
+  secret_hash text not null,            -- sha256 of the server-side secret (verify API)
+  created_at timestamptz not null default now()
+);
+create index if not exists aa_sites_ws on aa_sites(workspace_id);
+
+create table if not exists aa_agents (
+  id text primary key,
+  workspace_id text not null references workspaces(id) on delete cascade,
+  name text not null,
+  operator text not null,
+  contact text not null,
+  purpose text not null,                -- search | assistant | shopping | research | monitoring | other
+  actuation text not null,              -- hosted_browser | user_browser | api
+  principal_model text not null,        -- consumer_delegated | enterprise | autonomous
+  rate_per_min integer not null default 60,
+  homepage text not null default '',
+  status text not null default 'pending', -- pending | approved | suspended
+  review_note text,
+  created_at timestamptz not null default now(),
+  reviewed_at timestamptz
+);
+create index if not exists aa_agents_ws on aa_agents(workspace_id);
+
+create table if not exists aa_keys (
+  kid text primary key,                 -- RFC 7638 JWK thumbprint
+  agent_id text not null references aa_agents(id) on delete cascade,
+  jwk jsonb not null,                   -- public key only
+  created_at timestamptz not null default now(),
+  revoked_at timestamptz
+);
+create index if not exists aa_keys_agent on aa_keys(agent_id);
+
+create table if not exists aa_nonces (
+  key text primary key,                 -- keyid + nonce
+  expires_at timestamptz not null
+);
+
+create table if not exists aa_requests (
+  id text primary key,
+  site_id text not null references aa_sites(id) on delete cascade,
+  at timestamptz not null default now(),
+  method text not null,
+  path text not null,
+  tier text not null,
+  decision text not null,
+  verify_status text not null,          -- absent | invalid | valid
+  verify_reason text,
+  keyid text,
+  directory text,
+  agent_id text,
+  declared text,
+  ua text,
+  ip_hash text
+);
+create index if not exists aa_requests_site on aa_requests(site_id, at desc);
+create index if not exists aa_requests_agent on aa_requests(agent_id, at desc);
+
+create table if not exists aa_sessions (
+  site_id text not null references aa_sites(id) on delete cascade,
+  id text not null,                     -- SDK session id
+  started_at timestamptz not null,
+  last_at timestamptz not null,
+  tier text not null default 'T0',
+  agent_id text,
+  p_agent real not null default 0.25,
+  label text not null default 'uncertain',
+  hybrid boolean not null default false,
+  pages integer not null default 0,
+  score jsonb,                          -- evidence, segments, tasks, features
+  ua text,
+  ip_hash text,
+  primary key (site_id, id)
+);
+create index if not exists aa_sessions_recent on aa_sessions(site_id, last_at desc);
+
+create table if not exists aa_batches (
+  site_id text not null references aa_sites(id) on delete cascade,
+  session_id text not null,
+  seq integer not null,
+  events jsonb not null,                -- raw behavioural events, kept 30 days
+  received_at timestamptz not null default now(),
+  primary key (site_id, session_id, seq)
+);
+create index if not exists aa_batches_age on aa_batches(received_at);
 `;
 
 let ready: Promise<Db> | null = null;

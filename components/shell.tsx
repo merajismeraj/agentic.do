@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Activity,
   Blocks,
   BrainCircuit,
   CalendarClock,
@@ -9,6 +10,7 @@ import {
   Inbox,
   LogOut,
   Settings,
+  ShieldCheck,
   LibraryBig,
   Menu,
   Moon,
@@ -36,6 +38,10 @@ const NAV = [
   { href: "/app/inbox", label: "Approvals", icon: Inbox, badge: "approvals" as const },
   { href: "/app/agents", label: "Teammates", icon: Users },
   { href: "/app/schedule", label: "Routines", icon: CalendarClock },
+];
+const AGENT_TRAFFIC = [
+  { href: "/app/analytics", label: "Agent analytics", icon: Activity },
+  { href: "/app/analytics/agents", label: "Agent registry", icon: ShieldCheck },
 ];
 const SETUP = [
   { href: "/app/brains", label: "AI accounts", icon: BrainCircuit },
@@ -184,6 +190,11 @@ export function Shell({ children }: { children: ReactNode }) {
           </button>
         )}
       </div>
+
+      <SectionLabel>Agent traffic</SectionLabel>
+      {AGENT_TRAFFIC.map((n) => (
+        <NavItem key={n.href} {...n} active={path === n.href} />
+      ))}
 
       <SectionLabel>Setup</SectionLabel>
       {SETUP.map((n) => (

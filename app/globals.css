@@ -24,6 +24,11 @@
   --danger-soft: #fdecec;
   --shadow: 0 1px 2px rgb(24 24 27 / 0.04), 0 4px 16px rgb(24 24 27 / 0.06);
   --shadow-lg: 0 8px 40px rgb(24 24 27 / 0.14), 0 2px 6px rgb(24 24 27 / 0.06);
+  /* Agent analytics actor classes (validated: CVD + normal-vision separation, both modes). */
+  --viz-verified: #2a78d6;
+  --viz-agent: #eb6834;
+  --viz-uncertain: #4a3aa7;
+  --viz-human: #1baf7a;
 }
 
 .dark {
@@ -48,6 +53,10 @@
   --danger-soft: #2c1414;
   --shadow: 0 1px 2px rgb(0 0 0 / 0.4), 0 4px 16px rgb(0 0 0 / 0.3);
   --shadow-lg: 0 8px 40px rgb(0 0 0 / 0.6), 0 2px 6px rgb(0 0 0 / 0.4);
+  --viz-verified: #3987e5;
+  --viz-agent: #d95926;
+  --viz-uncertain: #9085e9;
+  --viz-human: #199e70;
 }
 
 @theme inline {
