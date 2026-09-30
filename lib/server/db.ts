@@ -44,93 +44,9 @@ create index if not exists sessions_user on sessions(user_id);
 create table if not exists workspaces (
   id text primary key,
   owner_id text not null unique references users(id) on delete cascade,
-  doc jsonb not null,                -- teammates, routines, AI accounts, context, profile
+  doc jsonb not null default '{}',   -- unused since Teammates moved to srk
   version integer not null default 1,
   updated_at timestamptz not null default now()
-);
-
-create table if not exists messages (
-  id text primary key,
-  workspace_id text not null references workspaces(id) on delete cascade,
-  thread_id text not null,
-  author text not null,
-  agent_id text,
-  text text not null default '',
-  steps jsonb,
-  approval_ids jsonb,
-  mode text,
-  error text,
-  created_at timestamptz not null default now()
-);
-create index if not exists messages_thread on messages(workspace_id, thread_id, created_at);
-
-create table if not exists approvals (
-  id text primary key,
-  workspace_id text not null references workspaces(id) on delete cascade,
-  agent_id text not null,
-  thread_id text,
-  tool_id text not null,
-  title text not null,
-  summary text not null,
-  preview jsonb not null,
-  call jsonb,                         -- the exact tool call executed on approval
-  status text not null default 'pending',
-  result text,
-  created_at timestamptz not null default now(),
-  decided_at timestamptz
-);
-create index if not exists approvals_ws on approvals(workspace_id, created_at desc);
-
-create table if not exists activity (
-  id text primary key,
-  workspace_id text not null references workspaces(id) on delete cascade,
-  agent_id text not null,
-  tool_id text,
-  text text not null,
-  created_at timestamptz not null default now()
-);
-create index if not exists activity_ws on activity(workspace_id, created_at desc);
-
-alter table messages add column if not exists trigger jsonb;
-
-create table if not exists routine_runs (
-  id text primary key,
-  workspace_id text not null references workspaces(id) on delete cascade,
-  routine_id text not null,
-  scheduled_for timestamptz not null,
-  manual boolean not null default false,
-  status text not null default 'running',
-  message_id text,
-  error text,
-  needs_approval boolean not null default false,
-  started_at timestamptz not null default now(),
-  finished_at timestamptz,
-  unique (workspace_id, routine_id, scheduled_for)   -- one run per occurrence, however many schedulers tick
-);
-create index if not exists routine_runs_ws on routine_runs(workspace_id, started_at desc);
-
-create table if not exists notifications (
-  id text primary key,
-  user_id text not null references users(id) on delete cascade,
-  workspace_id text not null references workspaces(id) on delete cascade,
-  kind text not null,                  -- 'approval' | 'failure' | 'test'
-  dedupe_key text not null unique,     -- one alert per approval / failed run, ever
-  payload jsonb not null,
-  created_at timestamptz not null default now(),
-  claimed_at timestamptz,
-  sent_at timestamptz,
-  attempts integer not null default 0,
-  last_error text
-);
-create index if not exists notifications_pending on notifications(user_id) where sent_at is null;
-
-create table if not exists connections (
-  workspace_id text not null references workspaces(id) on delete cascade,
-  provider text not null,
-  account text not null,
-  secret text not null,               -- sealed (AES-256-GCM) credentials
-  updated_at timestamptz not null default now(),
-  primary key (workspace_id, provider)
 );
 
 -- Agent analytics & verification (aa_*) ------------------------------------
@@ -226,10 +142,6 @@ create table if not exists aa_batches (
 );
 create index if not exists aa_batches_age on aa_batches(received_at);
 
-create table if not exists scheduler_heartbeat (
-  id integer primary key default 1 check (id = 1),
-  last_tick_at timestamptz not null
-);
 `;
 
 /**

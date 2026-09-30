@@ -2,8 +2,6 @@
 
 import { X } from "lucide-react";
 import { useEffect, type ButtonHTMLAttributes, type ReactNode } from "react";
-import { integrationById, providerById } from "@/lib/catalog";
-import type { Agent, ProviderId } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 /* Buttons ----------------------------------------------------------- */
@@ -64,60 +62,10 @@ export function Badge({
   );
 }
 
-export function Kbd({ children }: { children: ReactNode }) {
-  return (
-    <kbd className="inline-flex h-5 min-w-5 items-center justify-center rounded border border-line bg-surface-2 px-1 font-mono text-[10px] text-muted">
-      {children}
-    </kbd>
-  );
-}
-
 export function Card({ className, children, ...rest }: React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div {...rest} className={cn("rounded-2xl border border-line bg-surface shadow-card", className)}>
       {children}
-    </div>
-  );
-}
-
-export function Switch({
-  checked,
-  onChange,
-  label,
-}: {
-  checked: boolean;
-  onChange: (v: boolean) => void;
-  label?: string;
-}) {
-  return (
-    <button
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      onClick={(e) => {
-        e.stopPropagation();
-        onChange(!checked);
-      }}
-      className={cn(
-        "relative h-5 w-9 shrink-0 rounded-full transition-colors",
-        checked ? "bg-accent" : "bg-surface-3 ring-1 ring-inset ring-line-strong",
-      )}
-    >
-      <span
-        className={cn(
-          "absolute top-0.5 left-0.5 size-4 rounded-full bg-white shadow transition-transform",
-          checked && "translate-x-4",
-        )}
-      />
-    </button>
-  );
-}
-
-export function Meter({ value, className }: { value: number; className?: string }) {
-  const tone = value >= 90 ? "bg-danger" : value >= 70 ? "bg-warn" : "bg-ok";
-  return (
-    <div className={cn("h-1.5 w-full overflow-hidden rounded-full bg-surface-3", className)}>
-      <div className={cn("h-full rounded-full transition-all", tone)} style={{ width: `${Math.min(100, value)}%` }} />
     </div>
   );
 }
@@ -152,77 +100,6 @@ export function Segmented<T extends string>({
 }
 
 /* Logos & avatars --------------------------------------------------- */
-
-export function ProviderLogo({ id, size = 28, className }: { id: ProviderId; size?: number; className?: string }) {
-  const p = providerById(id);
-  return (
-    <span
-      className={cn("inline-flex shrink-0 items-center justify-center rounded-lg font-semibold text-white", className)}
-      style={{ width: size, height: size, background: p.color, fontSize: size * 0.5 }}
-      aria-label={p.name}
-      title={p.name}
-    >
-      {p.glyph}
-    </span>
-  );
-}
-
-export function ToolLogo({ id, size = 24, className }: { id: string; size?: number; className?: string }) {
-  const i = integrationById(id);
-  if (!i) return null;
-  return (
-    <span
-      className={cn("inline-flex shrink-0 items-center justify-center rounded-md font-bold text-white", className)}
-      style={{ width: size, height: size, background: i.color, fontSize: size * (i.glyph.length > 1 ? 0.36 : 0.5) }}
-      title={i.name}
-      aria-label={i.name}
-    >
-      {i.glyph}
-    </span>
-  );
-}
-
-export function AgentAvatar({
-  agent,
-  size = 32,
-  showStatus = false,
-  className,
-}: {
-  agent: Pick<Agent, "emoji" | "color" | "name"> & { status?: Agent["status"] };
-  size?: number;
-  showStatus?: boolean;
-  className?: string;
-}) {
-  return (
-    <span className={cn("relative inline-flex shrink-0", className)}>
-      <span
-        className="inline-flex items-center justify-center rounded-full"
-        style={{
-          width: size,
-          height: size,
-          fontSize: size * 0.5,
-          background: `color-mix(in srgb, ${agent.color} 16%, var(--surface))`,
-          boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${agent.color} 30%, transparent)`,
-        }}
-        aria-label={agent.name}
-      >
-        {agent.emoji}
-      </span>
-      {showStatus && agent.status && (
-        <span
-          className={cn(
-            "absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full ring-2 ring-surface",
-            agent.status === "working" && "bg-accent animate-pulse-ring",
-            agent.status === "idle" && "bg-ok",
-            agent.status === "paused" && "bg-muted",
-          )}
-        />
-      )}
-    </span>
-  );
-}
-
-/* Modal ------------------------------------------------------------- */
 
 export function Modal({
   open,
@@ -271,43 +148,6 @@ export function Modal({
 
 /* Rich text: **bold**, bullet lines, paragraphs ---------------------- */
 
-export function Rich({ text, className }: { text: string; className?: string }) {
-  return (
-    <div className={cn("space-y-2 text-[14px] leading-relaxed text-fg-2", className)}>
-      {text.split(/\n\n+/).map((para, i) => (
-        <div key={i} className="space-y-1">
-          {para.split("\n").map((line, j) => (
-            <p key={j} className={cn(line.startsWith("• ") && "flex gap-2")}>
-              {line.startsWith("• ") ? (
-                <>
-                  <span className="text-muted">•</span>
-                  <span>{inline(line.slice(2))}</span>
-                </>
-              ) : (
-                inline(line)
-              )}
-            </p>
-          ))}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function inline(s: string) {
-  return s.split(/(\*\*[^*]+\*\*|\*[^*]+\*)/).map((part, i) =>
-    part.startsWith("**") ? (
-      <strong key={i} className="font-semibold text-fg">
-        {part.slice(2, -2)}
-      </strong>
-    ) : part.startsWith("*") && part.length > 2 ? (
-      <em key={i}>{part.slice(1, -1)}</em>
-    ) : (
-      part
-    ),
-  );
-}
-
 export function Empty({ icon, title, body, action }: { icon: ReactNode; title: string; body: string; action?: ReactNode }) {
   return (
     <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-line-strong px-6 py-14 text-center">
@@ -333,3 +173,6 @@ export function Logo({ className }: { className?: string }) {
     </span>
   );
 }
+
+export const input =
+  "w-full rounded-lg border border-line bg-surface px-3 h-9 text-sm outline-none transition-colors placeholder:text-muted focus:border-accent focus:ring-2 focus:ring-accent/15";

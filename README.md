@@ -1,172 +1,37 @@
 # agentic.do
 
-AI teammates that connect to your tools, understand your context, and get work done on schedule — powered by the AI subscriptions you already pay for (ChatGPT, Claude, Gemini, SuperGrok, Copilot, Perplexity, Mistral, DeepSeek… as many as you have).
+Analytics and verification for AI agents. agentic.do shows a site which AI agents act on it, whether they proved who they are, and whether they finish what they came to do, and shows agent builders where their agents are accepted, challenged or failing. Agents are treated as a customer channel, not as fraud.
+
+How it decides (trust tiers, behavioural scoring, policy), how to integrate a site, the agent registry and the data policy are in **[docs/agent-analytics.md](docs/agent-analytics.md)**.
+
+> AI teammates, which used to live here, moved to their own product: **srk** (srk.app).
+
+## Run it
 
 ```bash
-npm install
 cp .env.example .env.local   # set SESSION_SECRET at minimum
+npm install
 npm run dev                  # http://localhost:3000
-npm test                     # schedule + API suites (in-memory Postgres, mocked vendors)
+npm test                     # unit + end-to-end API tests (in-memory Postgres)
 ```
 
-**Get started** creates an account and runs the 2‑minute onboarding. **Explore live demo** opens a sample workspace with no account: it lives in the browser and is always simulated.
+Without `DATABASE_URL`, data lives in an embedded Postgres (PGlite) under `.data/`. Set `EMAIL_DRIVER=log` to print verification and reset emails to the console.
 
-## Product surface
+## Deploy (Vercel + Supabase)
 
-| Area | Route | What it does |
-| --- | --- | --- |
-| Landing | `/` | Positioning, live product preview, routing visual, templates, pricing |
-| Onboarding | `/onboarding` | You → bring your AIs → connect tools → hire teammates (role‑aware defaults) |
-| Home | `/app` | Delegate box with auto‑assignment + `@mentions`, approvals, today's schedule, AI capacity, activity |
-| Approvals | `/app/inbox` | Human‑in‑the‑loop queue; edit before approve; `J`/`K`/`A`/`X` shortcuts |
-| Teammates | `/app/agents`, `/app/agents/[id]` | Hire from templates, chat with visible work trace, routines, settings |
-| Routines | `/app/schedule` | Day timeline + list of recurring work |
-| AI accounts | `/app/brains` | Pool subscriptions, usage meters, routing mode, live routing preview, failover |
-| Integrations | `/app/integrations` | Connect tools; surfaces tools teammates are blocked on |
-| Context | `/app/memory` | Editable memory about you / team / company |
-| Agent analytics | `/app/analytics` | Which AI agents use your site, their trust tier (Web Bot Auth), human vs agent vs hybrid sessions, task success — see [docs/agent-analytics.md](docs/agent-analytics.md) |
-| Agent registry | `/app/analytics/agents` | Register agents, get Ed25519 keys + a public Web Bot Auth directory, see cross-site acceptance and failures |
+1. Import the repo into Vercel.
+2. Connect Supabase through Vercel's Supabase integration (or set `DATABASE_URL` to the transaction pooler, port 6543). Tables are created on first request.
+3. Set `SESSION_SECRET`, `APP_URL`, and for email `RESEND_API_KEY` + `EMAIL_FROM`. Optionally `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`, `AA_ADMIN_EMAILS`, `AA_TRUSTED_DIRECTORIES`.
+4. Check `GET /api/health`: it reports what's configured and whether the database answers, never secret values.
 
-Global: `⌘K` command palette (navigate or delegate in one line), light/dark theme, mobile layout.
+## Code map
 
-## UX principles baked in
-
-- **Delegate in one line.** Type the outcome; the right teammate is picked for you (or `@mention`).
-- **Show the work.** Every run shows which model was routed, which tools were called, and what was found.
-- **Draft, then act.** Anything leaving the company waits in Approvals — editable, one tap to approve.
-- **Your AI, pooled.** Tasks route by strength and remaining plan capacity; near‑limit plans fail over automatically.
-- **Context you can see.** Memory is a list you can read, add to, and delete from.
-
-## Architecture
-
-- Next.js 16 (App Router) · React 19 · Tailwind CSS 4 · TypeScript
-- `lib/catalog.ts` — providers, integrations, teammate templates
-- `lib/engine.ts` — routing (`route`), planning (`plan`), auto‑assignment (`assign`)
-- `lib/store.tsx` — client store: account mode (server-synced, versioned) or demo mode (browser-only)
-- `lib/server/db.ts` — Postgres (`DATABASE_URL`) or embedded PGlite; schema bootstrapped on start
-- `lib/server/auth.ts` — accounts (scrypt), sessions (hashed tokens), same-origin checks
-- `lib/server/account.ts` — email confirmation and password reset (single-use hashed tokens, emails, pre-hijack protection)
-- `lib/server/workspace.ts` — workspace document, messages, approvals, activity, encrypted connections
-- `lib/server/keys.ts` — which credentials a workspace may use: its own AI keys, plus server-wide ones only where `SHARED_AI_KEYS` allows
-- `lib/seed.ts` — empty and demo workspaces
-- `lib/server/run.ts` — run orchestrator: routing, failover, tool loop, approval gate, NDJSON events
-- `lib/server/providers.ts` — Anthropic SDK adapter + OpenAI-compatible adapter (OpenAI, Gemini, xAI, Mistral, DeepSeek, Perplexity)
-- `lib/server/tools.ts` — tool registry; live connectors for Slack, GitHub and Linear, demo data for the rest
-- `lib/schedule.ts` — routine schedules, next/previous occurrence in the user's timezone (DST-safe)
-- `lib/server/runner.ts` — one persisted teammate run, shared by chat, Run now and the scheduler
-- `lib/server/scheduler.ts` — finds due routines, claims each occurrence once, runs them; `instrumentation.ts` + `api/cron/tick` drive it
-- `lib/server/notify.ts` + `lib/server/mailer.ts` — email alert outbox (dedupe, grouping, retries) and Resend delivery
-- `scripts/supabase-cron.mts` — installs the Supabase `pg_cron` job (secret in Vault)
-- `lib/server/slack.ts` — Add to Slack (OAuth v2), Web API client (form-encoded), channel lookup, auto-join, name resolution
-- `lib/server/google.ts` + `lib/server/seal.ts` — Google sign-in and Gmail/Calendar connection, AES-256-GCM sealing
-- API: `auth/{signup,login,logout,verify,verify/resend,forgot,reset}` · `auth/google/{start,callback}` · `auth/slack/{start,callback}` · `me` · `workspace` · `run` · `approvals/[id]` · `connections/{google,slack}` · `status` · `cron/tick` · `notifications/test` · `ai-keys/[provider]`
-
-## Accounts and data
-
-- **Sign-in:** email + password (scrypt, 10+ chars, rate-limited) or **Sign in with Google** (identity scopes only). A Google login links to an existing account only when Google says the email is verified.
-- **Sessions:** a random 256-bit token in an httpOnly, SameSite=Lax cookie; the database stores only its SHA-256. Writes also require a same-origin `Origin` header.
-- **Email confirmation:** sign-up emails a confirmation link. Alerts and test emails only go to confirmed addresses, so nobody can point them at an inbox they don't own. Unconfirmed users see a banner with **Resend link**, and Settings shows the status. Google sign-ins with a Google-verified email count as confirmed.
-- **Password reset:** **Forgot password?** emails a link that works once and for one hour. The response is identical whether or not the account exists, so it can't be used to discover accounts. Setting a new password signs out every other session, invalidates other reset links, and confirms the email. The emailed token is removed from the address bar as soon as the page opens.
-- **Tokens:** confirmation and reset tokens are 256-bit random values. Only their SHA-256 is stored, each is single-use, and requesting a new one invalidates the old one. The pages POST the token, so email link scanners don't use it up.
-- **Pre-hijacking protection:** if someone registers an email they don't own and the real owner later signs in with Google (verified email), the old password and every session are wiped before the account is handed over.
-- **Workspace:** teammates, routines, AI accounts, context and profile are one versioned document per account. Every save sends the version it was based on, so two tabs can't silently overwrite each other; the loser gets the latest copy.
-- **Server-authoritative:** messages, approvals and activity are written by the server. A run takes only `agentId` + `text` from the browser; the teammate's tools, prompt, AI accounts and memory are loaded from the database. Approving executes the stored action; the browser can edit only the text fields that tool declares editable, and an action can't execute twice.
-- **Demo:** signed-out visitors get a browser-only sample workspace. `/api/run` simulates it without calling any model or tool, so the demo can't spend your API credit.
-
-## Routines (scheduler)
-
-Routines run on their own at the scheduled time, in the account's timezone.
-
-- **Schedules:** weekdays, every day, specific days, every hour in a window, every 15/30/45 minutes in a window, or *when something happens*. Event triggers aren't wired yet, so those routines run on demand with **Run now**.
-- **Exactly once:** each occurrence is claimed in `routine_runs`, which has a unique (workspace, routine, time) key. Any number of schedulers or instances can tick at once and each 08:00 still runs once.
-- **Catch-up, not replay:** after downtime, an occurrence still runs if it's under 90 minutes late. Anything older is skipped rather than sent late. A new routine never runs occurrences from before it was created. Disabled routines and paused teammates don't run.
-- **Same rules as chat:** a scheduled run is an ordinary teammate run, so anything outgoing still waits in Approvals. The result lands in the teammate's chat labelled *Scheduled*, and the routine shows *Done*, *Waiting for your approval* or *Failed* with the reason.
-- **No fake work:** unattended runs never fall back to demo data. If no AI account has an API key, the run fails and says so. Runs interrupted by a crash are marked failed after 15 minutes.
-
-**Running it:**
-- **`next start`, Docker or a VM:** the in-process loop starts automatically and checks every minute.
-- **Serverless (Vercel and similar), with Supabase cron:** Supabase's `pg_cron` calls `GET /api/cron/tick` every minute through `pg_net`. The endpoint answers `202` straight away and runs the pass after responding, because `pg_net` gives up on requests after about 2 seconds.
-  1. On the app, set `CRON_SECRET` (`openssl rand -hex 32`) and `APP_URL`. Set `SCHEDULER=off` if the app also runs as a long-lived server.
-  2. Run `DATABASE_URL=<supabase connection string> APP_URL=https://your.app CRON_SECRET=<same value> npm run cron:supabase`. It enables `pg_cron` and `pg_net`, stores the secret in **Supabase Vault** (the job reads it from there, so it never appears in `cron.job` or logs), and schedules `agentic-scheduler-tick`. Re-running it updates the job; `-- --dry-run` shows the SQL, `-- --remove` unschedules it, `-- --every "*/2 * * * *"` changes the frequency.
-  3. Check it with `select status_code, created from net._http_response order by created desc limit 5;` and expect `202`. `supabase/cron.sql` has the same setup to paste into the SQL editor.
-- Extra or overlapping ticks are harmless, because each occurrence is claimed once. A pass has a time budget; routines it couldn't start stay unclaimed and are picked up by the next tick.
-
-## Email alerts
-
-When nobody's watching, scheduled work reaches you by email:
-- **Needs your approval:** a scheduled run drafted something, like a reply or a Slack post. The email shows what it wants to send and links to Approvals.
-- **Failed:** a routine couldn't run, with the reason (e.g. no API key, Google disconnected).
-
-How it works:
-- Alerts go into a `notifications` outbox with a unique key per approval or failed run, so nothing is emailed twice.
-- Each check sends **one email per person** with everything that's waiting.
-- Rows are claimed before sending, so concurrent workers never double-send. Resend gets an `Idempotency-Key`, so a retried request can't send twice either.
-- 429 and 5xx errors are retried (up to 5 attempts). Permanent errors, such as an unverified domain, aren't.
-- Content is HTML-escaped and links use `APP_URL`.
-- Things you start yourself (chat, Run now) don't email you; you're already there.
-
-Setup: create a [Resend](https://resend.com) API key, verify your sending domain, then set `RESEND_API_KEY`, `EMAIL_FROM` and `APP_URL`. People turn each alert type on or off and send a test email from **Settings**, which is also where the timezone routines run on is set. Without email configured, the app says so and alerts are dropped rather than sent late.
-
-## Execution
-
-Chat subscriptions (ChatGPT Plus, Claude Pro, …) can't be called by third‑party apps, so **live runs use each provider's API key**. Anything without a key keeps working in demo mode, and the UI labels each run **Live** or **Demo**.
-
-### Whose keys
-
-- **Each workspace brings its own.** Add a key under **AI accounts → Add API key**. The server checks it with the provider before saving (OpenAI, Anthropic, Gemini, xAI, Mistral and DeepSeek; Perplexity has no check endpoint, so a bad key shows up on the first run). Keys are stored per workspace, encrypted with AES-256-GCM, and never sent back to the browser; the UI shows only the last four characters. Runs, scheduled runs and approvals all use the workspace's own keys.
-- **The operator's keys are opt-in.** The provider keys and Slack, GitHub and Linear tokens in the server's environment are only used for accounts allowed by `SHARED_AI_KEYS`: `all` for a single-user or self-hosted setup, a comma-separated list of emails (e.g. just yours), or unset/`off` so everyone brings their own. A workspace's own key always takes priority.
-- Accounts without a live key see a clear "Add API key" prompt. Their chat runs are simulated and labelled **Demo**, and their scheduled routines fail with that reason. Nothing falls through to someone else's key, and the tests check the actual `Authorization` header to prove it.
-
-How a run works:
-
-1. **Route.** The task is classified (writing, research, coding…) and ranked across your enabled AI accounts by fit and remaining capacity. Accounts with a key run live.
-2. **Tool loop.** The model calls the teammate's tools (only those you've connected). Every call streams to the UI as a step.
-3. **Approval gate.** Write actions (send email, post to Slack, create issue…) are never executed during the run unless the teammate has full autonomy. They become approval cards. **Approve** calls `/api/approve`, which runs the action, with any edits you made on the card.
-4. **Failover.** If a provider errors before any tool has run, the run moves to the next ranked provider. After a tool has run, it stops rather than risk doing the work twice.
-
-Live connectors today: **Gmail and Google Calendar** (per-workspace Google sign-in), **Slack** (per-workspace "Add to Slack"), plus GitHub (`GITHUB_TOKEN`, `GITHUB_REPO`) and Linear (`LINEAR_API_KEY`) for shared accounts only. Notion, HubSpot, Stripe and Intercom return demo data until their OAuth is added.
-
-### Slack
-
-Each workspace installs the agentic.do bot into its own Slack. Teammates can then read channels, showing who said what, and, after you approve, post to them.
-
-Setup:
-1. At [api.slack.com/apps](https://api.slack.com/apps) choose **Create New App → From scratch**.
-2. Under **OAuth & Permissions**:
-   - Add the redirect URL `https://<your APP_URL>/api/auth/slack/callback`. Slack only accepts HTTPS, so for local development run a tunnel (e.g. `ngrok http 3000`) and set `APP_URL` to it.
-   - Add these **Bot Token Scopes**: `channels:read`, `channels:history`, `channels:join`, `groups:read`, `groups:history`, `chat:write`, `users:read`.
-3. Copy the **Client ID** and **Client Secret** from *Basic Information* into `SLACK_CLIENT_ID` and `SLACK_CLIENT_SECRET`. `SESSION_SECRET` must be set too.
-4. To let *other* Slack workspaces install it, turn on **Manage Distribution → Public Distribution**. Without it, only your own Slack can.
-
-Behaviour:
-- **Connect:** Integrations → Slack → **Add to Slack**. The bot token is stored per workspace, encrypted, and never sent to the browser.
-- **Reading:** public channels are joined automatically when a teammate reads them. Private channels need `/invite @agentic.do`. Author IDs are turned into names.
-- **Posting:** always goes through Approvals, as the bot.
-- **Disconnect:** revokes the token at Slack, which removes the bot, and deletes it.
-- **Priority:** a workspace's own install always wins. The server's `SLACK_BOT_TOKEN` is only used for accounts allowed by `SHARED_AI_KEYS`.
-
-Message text from Slack (and email) comes from other people, so teammates are told to treat it as information, never as instructions. Anything outgoing still needs your approval.
-
-### Google sign-in (Gmail + Calendar)
-
-1. In Google Cloud, enable the **Gmail API** and the **Google Calendar API**.
-2. Configure the OAuth consent screen. While it's in *Testing*, add your own Google account as a test user.
-3. Create an OAuth client of type **Web application** with the redirect URI `http://localhost:3000/api/auth/google/callback` (plus your production URL).
-4. Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` and `SESSION_SECRET` (32+ random characters).
-5. **Continue with Google** now appears on the sign-in page. To give teammates Gmail and Calendar, open **Integrations → Gmail → Connect** (or **Go live**).
-
-Signing in only asks for identity (`openid email profile`). Connecting asks for `gmail.readonly`, `gmail.send` and `calendar.events`; one consent covers both tools. Tokens are stored per workspace, **encrypted with AES-256-GCM**, and refreshed automatically, which is what will let scheduled routines use them later. **Disconnect** revokes the token at Google and deletes it.
-
-What teammates can do with it: search mail (Gmail query syntax), read a day's calendar in your timezone, and, after you approve, send email (threaded replies when replying) and create events with invites.
-
-Before a public launch: `gmail.readonly` and `gmail.send` are restricted scopes, so Google requires app verification and a third-party security assessment. Until then, only test users can connect.
-
-`npm test` runs the schedule unit tests plus 36 end-to-end checks against the real route handlers: accounts, sessions, rate limits, cross-site blocking, workspace versioning, persisted runs, approval tampering and double-execution, cross-account isolation, demo lockdown, the Google sign-in, connect, refresh and send paths, and the scheduler (exactly-once under concurrency, timezone, catch-up window, paused teammates, no fabricated runs, cron auth, Run now), email alerts (grouping, dedupe, escaping, retries, preferences), per-workspace keys (verification, encryption, isolation, never returned), account emails (confirmation, no-enumeration reset, session revocation, pre-hijack takeover), and Slack (install, paging, auto-join, approval-gated posting with the workspace's own token, revoke).
-
-**Before production:**
-- Leave `SHARED_AI_KEYS` unset (or list only your own email) before letting others sign up.
-- GitHub and Linear still only have server-wide tokens (shared accounts only). Per-workspace OAuth for them is still to do.
-- Plan-usage meters aren't tracked for real accounts yet, so routing weighs fit rather than remaining quota.
-- The login rate limiter is in-memory, so it's per instance. Use Redis or Upstash when running more than one.
-- The scheduler scans every workspace on each tick. That's fine for thousands of workspaces; beyond that, store the next run time and index it.
-- Alerts are email only; Slack DMs would be a natural addition.
+| Path | What |
+| --- | --- |
+| `app/page.tsx` | Landing page |
+| `app/app/analytics/` | Site dashboard and agent registry |
+| `app/api/aa/*`, `lib/server/aa/`, `lib/aa/` | Analytics and verification (see the doc above) |
+| `sdk/aa.ts` → `public/aa.js` | Browser SDK (`npm run sdk:build`, also run on `prebuild`) |
+| `app/api/auth/*`, `lib/server/auth.ts`, `lib/server/account.ts` | Accounts: scrypt passwords, hashed session tokens, email verification, password reset, "Continue with Google" |
+| `lib/server/db.ts` | Postgres (`DATABASE_URL` or the Supabase integration) or embedded PGlite; schema bootstrapped on connect |
+| `tests/` | `aa-unit` (incl. the RFC 9421 test vector), `aa-api` and `api` (accounts) |

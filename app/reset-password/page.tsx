@@ -4,9 +4,8 @@ import { Eye, EyeOff, Loader2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { input } from "@/components/agent-config";
 import { AuthShell, Notice } from "@/components/auth-shell";
-import { Button } from "@/components/ui";
+import { Button, input } from "@/components/ui";
 import { useStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 

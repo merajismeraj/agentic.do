@@ -3,14 +3,13 @@
 import { Loader2, MailCheck } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
-import { input } from "@/components/agent-config";
 import { AuthShell, Notice } from "@/components/auth-shell";
-import { Button } from "@/components/ui";
+import { Button, input } from "@/components/ui";
 import { useStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
 export default function ForgotPasswordPage() {
-  const { live } = useStore();
+  const { server } = useStore();
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState(false);
@@ -47,7 +46,7 @@ export default function ForgotPasswordPage() {
           <span className="mb-1.5 block text-[13px] font-medium">Email</span>
           <input className={cn(input, "h-11 text-[15px]")} type="email" autoFocus autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@company.com" />
         </label>
-        {live && !live.email.configured && <Notice tone="error">Email isn't set up on this server, so reset links can't be sent. Contact the administrator.</Notice>}
+        {server && !server.email && <Notice tone="error">Email isn't set up on this server, so reset links can't be sent. Contact the administrator.</Notice>}
         {error && <Notice tone="error">{error}</Notice>}
         <Button variant="primary" size="lg" className="w-full" disabled={busy || !email}>
           {busy ? <Loader2 size={16} className="animate-spin" /> : "Send reset link"}

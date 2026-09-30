@@ -10,7 +10,7 @@ const geistMono = Geist_Mono({ subsets: ["latin"], variable: "--font-geist-mono"
 export const metadata: Metadata = {
   title: "agentic.do — Analytics and verification for AI agents",
   description:
-    "See which AI agents act on your site, whether they proved who they are, and whether they finish what they came to do. Plus AI teammates that work for you.",
+    "See which AI agents act on your site, whether they proved who they are, and whether they finish what they came to do.",
 };
 
 // Apply the saved theme before paint to avoid a flash.

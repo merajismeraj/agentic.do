@@ -1,39 +1,20 @@
 /**
- * Starts the in-process scheduler when the app runs as a long-lived server
- * (`next start`, Docker, a VM). On serverless hosts, call /api/cron/tick from
- * a cron instead. Set SCHEDULER=off to disable, SCHEDULER=on to force.
+ * One-time cleanup: agentic.do used to drive a routines scheduler from Supabase
+ * pg_cron. That feature moved to srk, so remove the job (and its Vault secret)
+ * if it's still there. Safe to delete this file once it has run in production.
  */
 export async function register() {
-  if (process.env.NEXT_RUNTIME !== "nodejs") return;
-  const mode = process.env.SCHEDULER?.trim().toLowerCase();
-  if (mode === "off" || (mode !== "on" && process.env.VERCEL)) {
-    // Serverless: make sure Supabase pg_cron calls /api/cron/tick (no-op unless configured).
-    if (process.env.VERCEL) import("./lib/server/cron-sync").then((m) => m.syncSupabaseCron()).catch(() => {});
-    return;
+  if (process.env.NEXT_RUNTIME !== "nodejs" || !process.env.VERCEL) return;
+  try {
+    const { databaseUrl, db } = await import("./lib/server/db");
+    if (!databaseUrl()) return;
+    const d = await db();
+    const { rows } = await d.query<{ n: number }>("select count(*)::int as n from pg_extension where extname = 'pg_cron'");
+    if (!rows[0]?.n) return;
+    const job = await d.query("select cron.unschedule(jobid) from cron.job where jobname = 'agentic-scheduler-tick'");
+    await d.query("delete from vault.secrets where name = 'agentic_cron_secret'").catch(() => {});
+    if (job.rows.length) console.log("[cleanup] removed the retired Supabase scheduler job");
+  } catch (e) {
+    console.error("[cleanup] couldn't remove the retired scheduler job:", e instanceof Error ? e.message : e);
   }
-
-  const g = globalThis as unknown as { __agenticScheduler?: boolean };
-  if (g.__agenticScheduler) return;
-  g.__agenticScheduler = true;
-
-  const { tick } = await import("./lib/server/scheduler");
-  let running = false;
-  const loop = async () => {
-    if (running) return; // Never overlap passes in one process.
-    running = true;
-    try {
-      const r = await tick({ budgetMs: 50_000 });
-      if (r.started) console.log(`[scheduler] ran ${r.started} routine(s): ${r.done} done, ${r.failed} failed`);
-    } catch (e) {
-      console.error("[scheduler] tick failed", e);
-    } finally {
-      running = false;
-    }
-  };
-  // Align to the start of each minute so 08:00 routines start at 08:00.
-  setTimeout(() => {
-    loop();
-    setInterval(loop, 60_000);
-  }, 60_000 - (Date.now() % 60_000) + 2_000);
-  console.log("[scheduler] in-process scheduler started (checks every minute)");
 }

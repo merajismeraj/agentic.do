@@ -74,7 +74,7 @@ export async function sendVerification(user: User) {
     ...transactional({
       name: user.name,
       heading: "Confirm your email",
-      body: "One click so your teammates can reach you: approvals and alerts only go to confirmed addresses. The link works for 24 hours.",
+      body: "One click to confirm this address. We use it for sign-in and password resets. The link works for 24 hours.",
       cta: "Confirm email",
       url,
       footer: "Didn't sign up for agentic.do? You can ignore this email.",

@@ -6,8 +6,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
-import { input } from "./agent-config";
-import { Button, Logo } from "./ui";
+import { Button, input, Logo } from "./ui";
 
 const GOOGLE_ERRORS: Record<string, string> = {
   denied: "Google sign-in was cancelled.",
@@ -18,7 +17,7 @@ const GOOGLE_ERRORS: Record<string, string> = {
 };
 
 export function AuthForm({ kind }: { kind: "login" | "signup" }) {
-  const { mode, ready, reload, live } = useStore();
+  const { mode, ready, reload, server } = useStore();
   const router = useRouter();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -60,7 +59,7 @@ export function AuthForm({ kind }: { kind: "login" | "signup" }) {
     }
   };
 
-  const google = live?.google.configured;
+  const google = server?.google;
   const isSignup = kind === "signup";
 
   return (
@@ -80,7 +79,7 @@ export function AuthForm({ kind }: { kind: "login" | "signup" }) {
           {google && (
             <>
               <a
-                href={`/api/auth/google/start?purpose=login&return=${encodeURIComponent(back)}`}
+                href={`/api/auth/google/start?return=${encodeURIComponent(back)}`}
                 className="mt-7 flex h-11 w-full items-center justify-center gap-2.5 rounded-lg border border-line bg-surface text-[15px] font-medium shadow-sm transition-colors hover:bg-surface-2"
               >
                 <GoogleMark /> Continue with Google

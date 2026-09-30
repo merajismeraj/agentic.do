@@ -1,13 +1,11 @@
-import { schedulerHealth } from "@/lib/server/cron-sync";
 import { databaseUrl, db } from "@/lib/server/db";
+import { googleConfigured } from "@/lib/server/google";
 import { emailConfigured } from "@/lib/server/mailer";
-import { sealingConfigured } from "@/lib/server/seal";
 
 export const dynamic = "force-dynamic";
 
 /** Deployment check: which pieces are configured and whether the database answers. Never returns secrets. */
 export async function GET() {
-  const set = (k: string) => !!process.env[k]?.trim();
   let database: { ok: boolean; error?: string };
   try {
     await (await db()).query("select 1");
@@ -17,17 +15,10 @@ export async function GET() {
   }
   const config = {
     database: databaseUrl() ? "postgres" : "embedded",
-    sessionSecret: sealingConfigured(),
-    cronSecret: set("CRON_SECRET"),
-    appUrl: set("APP_URL"),
+    sessionSecret: (process.env.SESSION_SECRET?.trim().length ?? 0) >= 32,
+    appUrl: !!process.env.APP_URL?.trim(),
     email: emailConfigured(),
-    google: set("GOOGLE_CLIENT_ID") && set("GOOGLE_CLIENT_SECRET"),
-    slack: set("SLACK_CLIENT_ID") && set("SLACK_CLIENT_SECRET"),
+    google: googleConfigured(),
   };
-  const scheduler = !database.ok
-    ? null
-    : process.env.VERCEL || process.env.SCHEDULER?.trim().toLowerCase() === "off"
-      ? { mode: "external-cron", ...(await schedulerHealth().catch((e) => ({ error: (e as Error).message }))) }
-      : { mode: "in-process" };
-  return Response.json({ ok: database.ok && config.sessionSecret, database, config, scheduler }, { status: database.ok ? 200 : 503 });
+  return Response.json({ ok: database.ok && config.sessionSecret, database, config }, { status: database.ok ? 200 : 503 });
 }

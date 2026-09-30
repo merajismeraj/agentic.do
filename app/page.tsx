@@ -4,40 +4,27 @@ import {
   ArrowRight,
   BadgeCheck,
   BarChart3,
-  CalendarClock,
-  Check,
   Code2,
-  Eye,
   Fingerprint,
   Gauge,
   Globe,
-  Hand,
   KeyRound,
-  Layers,
   Lock,
   MousePointerClick,
-  Plug,
   ShieldCheck,
   Sparkles,
   Target,
 } from "lucide-react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { ThemeToggle } from "@/components/shell";
-import { AgentAvatar, Button, Logo, ToolLogo } from "@/components/ui";
-import { TEMPLATES } from "@/lib/catalog";
+import { Button, Logo } from "@/components/ui";
 import { useStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
 export default function Landing() {
-  const { mode, startDemo } = useStore();
-  const router = useRouter();
+  const { mode } = useStore();
   const signedIn = mode === "account";
-  const openDemo = () => {
-    if (mode === "anon") startDemo();
-    router.push("/app/teammates");
-  };
   const startHref = signedIn ? "/app" : "/signup";
 
   return (
@@ -54,9 +41,6 @@ export default function Landing() {
             </a>
             <a href="#builders" className="hover:text-fg">
               For agent builders
-            </a>
-            <a href="#teammates" className="hover:text-fg">
-              Teammates
             </a>
           </div>
           <div className="ml-auto flex items-center gap-2">
@@ -246,52 +230,6 @@ const { tier, decision, agent, vt } = await r.json();
         </div>
       </section>
 
-      {/* Teammates: the sub-product */}
-      <section id="teammates" className="mx-auto max-w-6xl px-5 py-24 sm:px-8">
-        <SectionTitle
-          eyebrow="Also in agentic.do · Teammates"
-          title="Put agents to work for you, too."
-          sub="AI teammates that plug into your tools, learn your context and run routines on schedule — powered by the AI subscriptions you already pay for."
-        />
-        <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
-          <Link href={signedIn ? "/app/teammates" : "/signup"}>
-            <Button variant="primary">
-              Build your team <ArrowRight size={16} />
-            </Button>
-          </Link>
-          <Button onClick={openDemo}>
-            <Eye size={16} /> Explore the Teammates demo
-          </Button>
-        </div>
-        <HeroProduct />
-        <div className="grid gap-5 md:grid-cols-4">
-          <Pillar
-            small
-            icon={<Plug size={18} />}
-            title="Connects to your tools"
-            body="Gmail, Calendar, Slack, GitHub, Linear and more, with scoped, revocable access."
-          />
-          <Pillar
-            small
-            icon={<Layers size={18} />}
-            title="Bring your own AI"
-            body="Claude, ChatGPT, Gemini, Grok and more. Each task goes to the best model, with failover."
-          />
-          <Pillar
-            small
-            icon={<CalendarClock size={18} />}
-            title="Works on schedule"
-            body="Morning briefs, standups and inbox triage run while you're busy."
-          />
-          <Pillar
-            small
-            icon={<Hand size={18} />}
-            title="You approve"
-            body="Emails, posts and changes wait for a one-tap OK. Every step is visible."
-          />
-        </div>
-      </section>
-
       {/* CTA */}
       <section className="px-5 pb-24 sm:px-8">
         <div className="relative mx-auto max-w-5xl overflow-hidden rounded-3xl bg-fg px-6 py-16 text-center text-bg sm:px-12">
@@ -378,109 +316,6 @@ function Pillar({
       </div>
       <div className="mt-4 font-semibold">{title}</div>
       <p className="mt-1.5 text-sm leading-relaxed text-muted">{body}</p>
-    </div>
-  );
-}
-
-/* A living miniature of the product for the hero. */
-function HeroProduct() {
-  const feed = [
-    {
-      a: TEMPLATES[0],
-      tool: "gcal",
-      text: "Prepped your 11:30 with Northwind",
-    },
-    {
-      a: TEMPLATES[1],
-      tool: "gmail",
-      text: "Archived 23 newsletters, drafted 4 replies",
-    },
-    { a: TEMPLATES[3], tool: "slack", text: "Posted standup to #eng" },
-    { a: TEMPLATES[2], tool: "hubspot", text: "Qualified 2 inbound leads" },
-    { a: TEMPLATES[5], tool: "stripe", text: "Flagged 4 failed payments" },
-  ];
-  const [n, setN] = useState(3);
-  useEffect(() => {
-    const t = setInterval(() => setN((x) => x + 1), 2400);
-    return () => clearInterval(t);
-  }, []);
-  const visible = Array.from(
-    { length: 3 },
-    (_, i) => feed[(n - i) % feed.length],
-  );
-
-  return (
-    <div className="relative mx-auto mt-12 max-w-5xl pb-12">
-      <div className="rounded-[22px] border border-line bg-surface-2/70 p-2 shadow-pop">
-        <div className="overflow-hidden rounded-2xl border border-line bg-bg">
-          <div className="flex items-center gap-1.5 border-b border-line px-4 py-2.5">
-            <span className="size-2.5 rounded-full bg-line-strong" />
-            <span className="size-2.5 rounded-full bg-line-strong" />
-            <span className="size-2.5 rounded-full bg-line-strong" />
-            <span className="mx-auto rounded-md bg-surface-2 px-3 py-0.5 font-mono text-[11px] text-muted">
-              app.agentic.do
-            </span>
-          </div>
-          <div className="grid gap-5 p-5 text-left sm:p-7 md:grid-cols-[1.25fr_1fr]">
-            <div>
-              <div className="text-xs text-muted">Good morning, Alex.</div>
-              <div className="mt-1 text-lg font-semibold tracking-tight">
-                Your team handled 41 things overnight.{" "}
-                <span className="text-accent">3 need you.</span>
-              </div>
-              <div className="mt-4 rounded-xl border border-line bg-surface p-4 shadow-card">
-                <div className="flex items-center gap-2 text-xs text-muted">
-                  <AgentAvatar agent={TEMPLATES[1]} size={22} />{" "}
-                  <span className="font-medium text-fg">Iris</span> wants to
-                  <ToolLogo id="gmail" size={14} className="rounded" /> Gmail
-                </div>
-                <div className="mt-2 text-sm font-medium">
-                  Reply to Priya (Northwind) about redlines
-                </div>
-                <div className="mt-2 rounded-lg bg-surface-2 p-2.5 text-[12px] leading-relaxed text-fg-2">
-                  Hi Priya — thanks for turning these around. We're good with
-                  everything except 7.2; could we cap liability at 12 months of
-                  fees?
-                </div>
-                <div className="mt-3 flex gap-2">
-                  <span className="inline-flex h-7 items-center gap-1 rounded-md bg-accent px-2.5 text-xs font-medium text-accent-fg">
-                    <Check size={12} /> Approve
-                  </span>
-                  <span className="inline-flex h-7 items-center rounded-md border border-line px-2.5 text-xs">
-                    Edit
-                  </span>
-                </div>
-              </div>
-            </div>
-            <div className="space-y-2.5">
-              <div className="text-xs font-medium text-muted">
-                Live activity
-              </div>
-              {visible.map((f, i) => (
-                <div
-                  key={`${n}-${i}`}
-                  className={cn(
-                    "flex items-center gap-2.5 rounded-xl border border-line bg-surface p-2.5 shadow-sm",
-                    i === 0 && "animate-rise",
-                  )}
-                  style={{ opacity: 1 - i * 0.22 }}
-                >
-                  <AgentAvatar agent={f.a} size={26} />
-                  <span className="min-w-0 flex-1 truncate text-[13px]">
-                    <span className="font-medium">{f.a.name}</span>{" "}
-                    <span className="text-fg-2">{f.text}</span>
-                  </span>
-                  <ToolLogo id={f.tool} size={18} className="rounded" />
-                </div>
-              ))}
-              <div className="flex items-center gap-2 rounded-xl border border-dashed border-line-strong p-2.5 text-[12px] text-muted">
-                <Sparkles size={14} className="text-accent" /> Routed to Claude
-                · ChatGPT at 94% → failing over
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
     </div>
   );
 }

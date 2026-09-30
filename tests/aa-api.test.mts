@@ -48,18 +48,7 @@ class Browser {
   }
 }
 
-const doc = {
-  user: { name: "Alex", company: "Northstar", role: "Founder", timezone: "Asia/Kolkata" },
-  brains: [],
-  routing: "auto",
-  connected: [],
-  agents: [],
-  routines: [],
-  memory: [],
-};
-
 const signup = await route("app/api/auth/signup/route.ts");
-const workspace = await route("app/api/workspace/route.ts");
 const sites = await route("app/api/aa/sites/route.ts");
 const siteOne = await route("app/api/aa/sites/[id]/route.ts");
 const agents = await route("app/api/aa/agents/route.ts");
@@ -77,7 +66,6 @@ async function account(email: string) {
   const b = new Browser();
   const res = b.take(await signup.POST(b.req("/api/auth/signup", { method: "POST", body: { email, password: "correct horse battery", name: email.split("@")[0] } })));
   assert.equal(res.status, 200);
-  assert.equal((await workspace.PUT(b.req("/api/workspace", { method: "PUT", body: { doc, baseVersion: null } }))).status, 200);
   return b;
 }
 

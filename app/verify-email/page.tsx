@@ -41,7 +41,7 @@ export default function VerifyEmailPage() {
       {state === "done" && (
         <div className="space-y-5">
           <p className="flex items-center gap-2 text-[15px] text-fg-2">
-            <CheckCircle2 size={18} className="text-ok" /> Your teammates can now email you when they need an approval.
+            <CheckCircle2 size={18} className="text-ok" /> Your email is confirmed.
           </p>
           <Link href={mode === "account" ? "/app" : "/login"}>
             <Button variant="primary" size="lg" className="w-full">
