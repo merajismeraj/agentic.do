@@ -41,9 +41,16 @@ export async function getWorkspace(userId: string, conn?: Db): Promise<Workspace
 }
 
 export async function requireWorkspace(userId: string) {
-  const ws = await getWorkspace(userId);
-  if (!ws) throw new HttpError(404, "Finish onboarding first");
-  return ws;
+  return ensureWorkspace(userId);
+}
+
+/** Every account gets an empty workspace on first use; Teammates setup is optional. */
+export async function ensureWorkspace(userId: string, name = ""): Promise<Workspace> {
+  const existing = await getWorkspace(userId);
+  if (existing) return existing;
+  const doc = { user: { name, company: "", role: "", timezone: "" }, brains: [], routing: "auto", connected: [], agents: [], routines: [], memory: [] };
+  await (await db()).query("insert into workspaces (id, owner_id, doc) values ($1, $2, $3) on conflict (owner_id) do nothing", [newId(), userId, JSON.stringify(doc)]);
+  return (await getWorkspace(userId))!;
 }
 
 /**
@@ -65,6 +72,8 @@ export async function saveDoc(userId: string, doc: WorkspaceDoc, baseVersion: nu
       [JSON.stringify(doc), current.id, baseVersion],
     );
     if (!rows[0]) return { ok: false as const, doc: current.doc, version: current.version };
+    // Welcome messages are also accepted when Teammates is first set up in an existing (empty) workspace.
+    if (!current.doc.agents?.length) for (const m of init?.messages ?? []) await insertMessage(current.id, { ...m, id: safeId(m.id) }, tx);
     return { ok: true as const, id: current.id, version: rows[0].version };
   });
 }

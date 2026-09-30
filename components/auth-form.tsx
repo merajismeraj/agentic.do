@@ -53,7 +53,7 @@ export function AuthForm({ kind }: { kind: "login" | "signup" }) {
       const body = (await res.json().catch(() => ({}))) as { error?: string };
       if (!res.ok) throw new Error(body.error ?? "Something went wrong");
       await reload();
-      router.replace(kind === "signup" ? "/onboarding" : back);
+      router.replace(back);
     } catch (err) {
       setError((err as Error).message);
       setBusy(false);
@@ -72,15 +72,15 @@ export function AuthForm({ kind }: { kind: "login" | "signup" }) {
       </header>
       <main className="flex flex-1 items-start justify-center px-5 pt-8 pb-16 sm:pt-16">
         <div className="animate-rise w-full max-w-sm">
-          <h1 className="text-[28px] leading-tight font-semibold tracking-tight">{isSignup ? "Build your AI team" : "Welcome back"}</h1>
+          <h1 className="text-[28px] leading-tight font-semibold tracking-tight">{isSignup ? "See the AI agents on your site" : "Welcome back"}</h1>
           <p className="mt-2 text-[15px] text-muted">
-            {isSignup ? "Two minutes to set up. Your first teammate starts working today." : "Sign in to pick up where your team left off."}
+            {isSignup ? "Two minutes to set up. Your first agent sessions show up today." : "Sign in to pick up where you left off."}
           </p>
 
           {google && (
             <>
               <a
-                href={`/api/auth/google/start?purpose=login&return=${encodeURIComponent(isSignup ? "/onboarding" : back)}`}
+                href={`/api/auth/google/start?purpose=login&return=${encodeURIComponent(back)}`}
                 className="mt-7 flex h-11 w-full items-center justify-center gap-2.5 rounded-lg border border-line bg-surface text-[15px] font-medium shadow-sm transition-colors hover:bg-surface-2"
               >
                 <GoogleMark /> Continue with Google

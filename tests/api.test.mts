@@ -191,9 +191,12 @@ ok("sign up validates password, normalises email, rejects duplicates, sets httpO
 
 let body = await meOf(alex);
 assert.equal(body.user.email, "alex@northstar.com");
-assert.equal(body.workspace, null);
+assert.equal(body.workspace.version, 1);
+assert.deepEqual(body.workspace.doc.agents, []);
+assert.equal(body.workspace.doc.user.name, "Alex");
+assert.equal((await meOf(alex)).workspace.version, 1, "created once, not on every load");
 assert.equal((await me.GET(new Browser().req("/api/me"))).status, 401);
-ok("/api/me requires a session; a new account has no workspace yet");
+ok("/api/me requires a session; a new account gets an empty workspace (Teammates setup is optional)");
 
 const other = new Browser();
 res = await login.POST(other.req("/api/auth/login", { method: "POST", body: { email: "alex@northstar.com", password: "wrong password" } }));
@@ -222,21 +225,31 @@ assert.equal(res.status, 400);
 res = await workspace.PUT(
   alex.req("/api/workspace", {
     method: "PUT",
-    body: { doc: doc(), baseVersion: null, init: { messages: [{ id: "welcome1", threadId: "rex", author: "agent", agentId: "rex", text: "Hi, I'm Rex", at: Date.now() - 5000 }] } },
+    body: { doc: doc(), baseVersion: null, init: { messages: [{ id: "welcome0", threadId: "rex", author: "agent", agentId: "rex", text: "stale", at: Date.now() - 6000 }] } },
   }),
 );
-assert.deepEqual(await res.json(), { version: 1 });
+assert.equal(res.status, 409, "the auto-created workspace can't be blindly overwritten");
+res = await workspace.PUT(
+  alex.req("/api/workspace", {
+    method: "PUT",
+    body: { doc: doc(), baseVersion: 1, init: { messages: [{ id: "welcome1", threadId: "rex", author: "agent", agentId: "rex", text: "Hi, I'm Rex", at: Date.now() - 5000 }] } },
+  }),
+);
+assert.deepEqual(await res.json(), { version: 2 });
 body = await meOf(alex);
 assert.equal(body.workspace.doc.agents[0].name, "Rex");
-assert.equal(body.messages[0].text, "Hi, I'm Rex");
-res = await workspace.PUT(alex.req("/api/workspace", { method: "PUT", body: { doc: doc({ routing: "cost" }), baseVersion: 1 } }));
-assert.deepEqual(await res.json(), { version: 2 });
-res = await workspace.PUT(alex.req("/api/workspace", { method: "PUT", body: { doc: doc({ routing: "quality" }), baseVersion: 1 } }));
+assert.deepEqual(body.messages.map((m: { text: string }) => m.text), ["Hi, I'm Rex"]);
+res = await workspace.PUT(
+  alex.req("/api/workspace", { method: "PUT", body: { doc: doc({ routing: "cost" }), baseVersion: 2, init: { messages: [{ id: "welcome2", threadId: "rex", author: "agent", agentId: "rex", text: "again", at: Date.now() }] } } }),
+);
+assert.deepEqual(await res.json(), { version: 3 });
+assert.equal((await meOf(alex)).messages.length, 1, "welcome messages only when Teammates is first set up");
+res = await workspace.PUT(alex.req("/api/workspace", { method: "PUT", body: { doc: doc({ routing: "quality" }), baseVersion: 2 } }));
 assert.equal(res.status, 409);
 body = await res.json();
-assert.equal(body.version, 2);
+assert.equal(body.version, 3);
 assert.equal(body.doc.routing, "cost");
-ok("workspace validates, is created with a welcome message, and rejects stale writes (409 + latest)");
+ok("workspace validates, Teammates setup lands in it with a welcome message, and stale writes get 409 + latest");
 
 /* ---------------------------- live runs ------------------------------ */
 

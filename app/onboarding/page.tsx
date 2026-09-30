@@ -40,7 +40,7 @@ export default function Onboarding() {
     // While finishing, the page navigates to the new teammate itself.
     if (!ready || building >= 0) return;
     if (mode !== "account") router.replace("/signup");
-    else if (state.onboarded) router.replace("/app");
+    else if (state.agents.length) router.replace("/app/teammates");
   }, [ready, mode, state.onboarded, router, building]);
 
   useEffect(() => {
@@ -72,6 +72,8 @@ export default function Onboarding() {
       const first = hired[0]?.agent;
       const next: State = {
         ...EMPTY,
+        // Keep what the workspace already has (e.g. notification settings); this flow adds Teammates.
+        notifications: state.notifications,
         onboarded: true,
         user: { name: name.trim(), company: company.trim(), role: role.label, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone },
         brains: ais.map((id) => ({
@@ -102,7 +104,7 @@ export default function Onboarding() {
           : [],
       };
       finishOnboarding(next).then((ok) => {
-        if (ok) router.push(first ? `/app/agents/${first.id}` : "/app");
+        if (ok) router.push(first ? `/app/agents/${first.id}` : "/app/teammates");
         else setBuilding(-1);
       });
     }, 2600);

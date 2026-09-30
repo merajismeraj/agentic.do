@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowRight, Blocks, BrainCircuit, CalendarClock, CornerDownLeft, Home, Inbox, LibraryBig, Search, Sparkles, UserPlus, Users } from "lucide-react";
+import { Activity, ArrowRight, Blocks, BrainCircuit, CalendarClock, CornerDownLeft, Home, Inbox, LibraryBig, Search, ShieldCheck, Sparkles, UserPlus, Users } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { assign } from "@/lib/engine";
@@ -59,7 +59,9 @@ export function CommandPalette({ open, onClose, onHire }: { open: boolean; onClo
     }
 
     const pages: Item[] = [
-      { id: "home", group: "Go to", label: "Home", icon: <Home size={16} />, run: go("/app") },
+      { id: "analytics", group: "Go to", label: "Agent analytics", icon: <Activity size={16} />, run: go("/app/analytics") },
+      { id: "registry", group: "Go to", label: "Agent registry", icon: <ShieldCheck size={16} />, run: go("/app/analytics/agents") },
+      { id: "home", group: "Go to", label: "Teammates home", icon: <Home size={16} />, run: go("/app/teammates") },
       { id: "inbox", group: "Go to", label: "Approvals", icon: <Inbox size={16} />, run: go("/app/inbox") },
       { id: "team", group: "Go to", label: "Teammates", icon: <Users size={16} />, run: go("/app/agents") },
       { id: "routines", group: "Go to", label: "Routines", icon: <CalendarClock size={16} />, run: go("/app/schedule") },

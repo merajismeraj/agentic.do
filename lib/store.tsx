@@ -231,7 +231,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const res = await fetch("/api/workspace", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ doc: docOf(next), baseVersion: null, init: { messages: next.messages } }),
+        body: JSON.stringify({ doc: docOf(next), baseVersion: version.current, init: { messages: next.messages } }),
       });
       if (!res.ok) {
         toast(res.status === 409 ? "You already have a workspace" : "Couldn't save your workspace — try again");

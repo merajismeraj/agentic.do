@@ -23,7 +23,7 @@ export function VerifyBanner() {
     <div className="flex items-center gap-3 border-b border-warn/25 bg-warn-soft/60 px-4 py-2 text-[13px] text-warn sm:px-8">
       <MailWarning size={15} className="shrink-0" />
       <span className="min-w-0 flex-1">
-        Confirm <span className="font-medium">{account.email}</span> so your teammates can email you when they need an approval.
+        Confirm <span className="font-medium">{account.email}</span> so we can send you alerts and account emails.
       </span>
       <button onClick={resend} disabled={busy} className="shrink-0 font-medium underline disabled:opacity-50">
         {busy ? "Sending…" : "Resend link"}
