@@ -227,6 +227,22 @@ create table if not exists aa_batches (
 create index if not exists aa_batches_age on aa_batches(received_at);
 `;
 
+/**
+ * Accepts the URLs Supabase hands out (including Prisma's `?pgbouncer=true`): TLS is
+ * configured in code, and ORM-only parameters mean nothing to node-postgres.
+ */
+export function pgUrl(raw: string) {
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    throw new Error("DATABASE_URL isn't a valid URL. If the password has characters like @ # / ?, URL-encode them.");
+  }
+  const local = u.hostname === "localhost" || u.hostname === "127.0.0.1" || u.searchParams.get("sslmode") === "disable";
+  for (const k of ["sslmode", "pgbouncer", "connection_limit", "pool_timeout", "schema"]) u.searchParams.delete(k);
+  return { connectionString: u.toString(), local };
+}
+
 let ready: Promise<Db> | null = null;
 
 export function db(): Promise<Db> {
@@ -252,11 +268,10 @@ async function connect(): Promise<Db> {
 
   if (url) {
     const { Pool } = await import("pg");
-    const host = new URL(url).hostname;
-    const local = host === "localhost" || host === "127.0.0.1" || url.includes("sslmode=disable");
+    const { connectionString, local } = pgUrl(url);
     const ca = process.env.DATABASE_CA_CERT?.replace(/\\n/g, "\n");
     const pool = new Pool({
-      connectionString: url.replace(/[?&]sslmode=[^&]*/, ""),
+      connectionString,
       // Serverless: few connections per instance; the Supabase pooler multiplexes the rest.
       max: process.env.VERCEL ? 3 : 5,
       idleTimeoutMillis: 10_000,
