@@ -6,7 +6,11 @@
 export async function register() {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
   const mode = process.env.SCHEDULER?.trim().toLowerCase();
-  if (mode === "off" || (mode !== "on" && process.env.VERCEL)) return;
+  if (mode === "off" || (mode !== "on" && process.env.VERCEL)) {
+    // Serverless: make sure Supabase pg_cron calls /api/cron/tick (no-op unless configured).
+    if (process.env.VERCEL) import("./lib/server/cron-sync").then((m) => m.syncSupabaseCron()).catch(() => {});
+    return;
+  }
 
   const g = globalThis as unknown as { __agenticScheduler?: boolean };
   if (g.__agenticScheduler) return;

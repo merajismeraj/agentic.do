@@ -1,3 +1,4 @@
+import { schedulerHealth } from "@/lib/server/cron-sync";
 import { databaseUrl, db } from "@/lib/server/db";
 import { emailConfigured } from "@/lib/server/mailer";
 import { sealingConfigured } from "@/lib/server/seal";
@@ -23,5 +24,10 @@ export async function GET() {
     google: set("GOOGLE_CLIENT_ID") && set("GOOGLE_CLIENT_SECRET"),
     slack: set("SLACK_CLIENT_ID") && set("SLACK_CLIENT_SECRET"),
   };
-  return Response.json({ ok: database.ok && config.sessionSecret, database, config }, { status: database.ok ? 200 : 503 });
+  const scheduler = !database.ok
+    ? null
+    : process.env.VERCEL || process.env.SCHEDULER?.trim().toLowerCase() === "off"
+      ? { mode: "external-cron", ...(await schedulerHealth().catch((e) => ({ error: (e as Error).message }))) }
+      : { mode: "in-process" };
+  return Response.json({ ok: database.ok && config.sessionSecret, database, config, scheduler }, { status: database.ok ? 200 : 503 });
 }

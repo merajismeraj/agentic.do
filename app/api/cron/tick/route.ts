@@ -1,5 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import { after } from "next/server";
+import { db } from "@/lib/server/db";
 import { tick } from "@/lib/server/scheduler";
 
 export const runtime = "nodejs";
@@ -22,8 +23,11 @@ export async function GET(req: Request) {
   const expected = Buffer.from(`Bearer ${secret}`);
   if (given.length !== expected.length || !timingSafeEqual(given, expected)) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
+  // Proof for /api/health that the external cron reaches the app.
+  const beat = async () =>
+    (await db()).query("insert into scheduler_heartbeat (id, last_tick_at) values (1, now()) on conflict (id) do update set last_tick_at = now()").catch(() => {});
   const pass = () =>
-    tick().then(
+    beat().then(() => tick()).then(
       (r) => r.started && console.log(`[scheduler] cron pass ran ${r.started} routine(s): ${r.done} done, ${r.failed} failed`),
       (e) => console.error("[scheduler] cron pass failed", e),
     );

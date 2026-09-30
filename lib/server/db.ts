@@ -225,6 +225,11 @@ create table if not exists aa_batches (
   primary key (site_id, session_id, seq)
 );
 create index if not exists aa_batches_age on aa_batches(received_at);
+
+create table if not exists scheduler_heartbeat (
+  id integer primary key default 1 check (id = 1),
+  last_tick_at timestamptz not null
+);
 `;
 
 /**

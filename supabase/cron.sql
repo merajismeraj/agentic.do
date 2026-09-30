@@ -1,4 +1,5 @@
--- Manual alternative to `npm run cron:supabase`. Run in the Supabase SQL editor.
+-- Manual alternative. On Vercel the app installs and syncs this job itself on boot (lib/server/cron-sync.ts),
+-- and `npm run cron:supabase` does the same from any machine. Run in the Supabase SQL editor.
 -- Replace <APP_URL> and <CRON_SECRET>. The same CRON_SECRET must be set on the app.
 
 create extension if not exists pg_cron with schema pg_catalog;
