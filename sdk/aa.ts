@@ -7,6 +7,7 @@
  * Collects timings, pointer positions and counts only. Never keystroke values,
  * form contents or page text. Built to public/aa.js by `npm run sdk:build`.
  */
+import { CLICK_ID_PARAMS, type SourceSignals } from "../lib/aa/attribution";
 import type { AaEvent } from "../lib/aa/events";
 
 type TaskState = "start" | "complete" | "fail";
@@ -39,7 +40,8 @@ interface AaApi {
   const IDLE = 30 * 60_000;
   let sid = store?.getItem("aa_sid") ?? "";
   const lastSeen = Number(store?.getItem("aa_last") ?? 0);
-  if (!sid || now() - lastSeen > IDLE) {
+  const newSession = !sid || now() - lastSeen > IDLE;
+  if (newSession) {
     sid = Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, "0")).join("");
     store?.setItem("aa_seq", "0");
   }
@@ -62,6 +64,35 @@ interface AaApi {
     const blob = new Blob([body], { type: "text/plain" });
     if (beacon && navigator.sendBeacon?.(endpoint, blob)) return;
     fetch(endpoint, { method: "POST", body: blob, keepalive: true, credentials: "omit" }).catch(() => {});
+  }
+
+  /* ----------------------------- source ----------------------------- */
+
+  // Where this session came from. Referrer is reduced to host + path (the query
+  // string can carry personal data); click ids are reported by name only.
+  if (newSession) {
+    const q = new URLSearchParams(location.search);
+    const pick = (k: string) => q.get(k)?.slice(0, 100) || undefined;
+    let ref = "";
+    try {
+      const r = document.referrer ? new URL(document.referrer) : null;
+      if (r && r.hostname !== location.hostname) ref = (r.hostname + r.pathname).slice(0, 300);
+    } catch {}
+    const utm = { source: pick("utm_source"), medium: pick("utm_medium"), campaign: pick("utm_campaign"), term: pick("utm_term"), content: pick("utm_content") };
+    const sig: SourceSignals = {
+      ref: ref || undefined,
+      land: location.pathname.slice(0, 300),
+      utm: Object.values(utm).some(Boolean) ? utm : undefined,
+      clid: CLICK_ID_PARAMS.find((k) => q.has(k)),
+    };
+    // First touch for this browser, kept 90 days. Only marketing signals; no identifier.
+    let ft: SourceSignals | undefined;
+    try {
+      const saved = JSON.parse(localStorage.getItem("aa_ft") ?? "null") as (SourceSignals & { at: number }) | null;
+      if (saved && now() - saved.at < 90 * 86_400_000) ft = saved;
+      else localStorage.setItem("aa_ft", JSON.stringify({ ...sig, at: now() }));
+    } catch {}
+    push({ t: "src", ts: now(), ...sig, ft: ft ? { ref: ft.ref, land: ft.land, utm: ft.utm, clid: ft.clid } : undefined });
   }
 
   /* ------------------------------ page ------------------------------ */

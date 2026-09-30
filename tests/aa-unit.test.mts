@@ -80,7 +80,7 @@ const bad = async (req: { url?: string; headers?: Record<string, string> }, opts
 };
 assert.equal(await bad({ url: "https://evil.test/p/1" }), "bad_signature");
 assert.equal(await bad({ headers: { ...headers, "signature-agent": '"https://other.test"' } }), "bad_signature");
-assert.equal(await bad({ headers: { ...headers, signature: headers.signature.replace(/:(.)/, ":A") } }), "bad_signature");
+assert.equal(await bad({ headers: { ...headers, signature: headers.signature.replace(/:(.)/, (_m: string, c: string) => `:${c === "A" ? "B" : "A"}`) } }), "bad_signature");
 assert.equal(await bad({}, { now: Math.floor(Date.now() / 1000) + 3600 }), "expired");
 assert.equal(await bad({}, { now: Math.floor(Date.now() / 1000) - 3600 }), "not_yet_valid");
 assert.equal(await bad({}, { resolveKey: async () => null }), "unknown_key");
@@ -219,5 +219,50 @@ assert.equal(fn, 0, "no synthetic agent labelled human");
 assert.equal(falseHybrid, 0, "pure sessions are never split");
 assert.ok(hybridFound >= 57, `hybrid sessions found: ${hybridFound}/60`);
 ok(`60 seeds each: 0 humans labelled agent, 0 agents labelled human, 0 false hybrids, ${hybridFound}/60 hand-offs found`);
+
+/* ---------------------------- attribution ---------------------------- */
+
+type Attr = typeof import("../lib/aa/attribution.ts");
+const at = await mod<Attr>("../lib/aa/attribution.ts");
+const ch = (sig: Parameters<Attr["attribute"]>[0]) => at.attribute(sig);
+const cases: [string, Parameters<Attr["attribute"]>[0], string, string, string][] = [
+  // [what, signals, channel, source, medium]
+  ["no referrer, no tags", { land: "/" }, "Direct", "(direct)", "(none)"],
+  ["Google search", { ref: "www.google.co.uk/", land: "/pricing" }, "Organic search", "google", "organic"],
+  ["Bing search", { ref: "www.bing.com/search" }, "Organic search", "bing", "organic"],
+  ["DuckDuckGo", { ref: "duckduckgo.com/" }, "Organic search", "duckduckgo", "organic"],
+  ["ChatGPT link", { ref: "chatgpt.com/" }, "AI assistants", "chatgpt", "ai"],
+  ["ChatGPT's utm_source tag, no referrer", { utm: { source: "chatgpt.com" } }, "AI assistants", "chatgpt", "ai"],
+  ["Perplexity", { ref: "www.perplexity.ai/search/abc" }, "AI assistants", "perplexity", "ai"],
+  ["Claude", { ref: "claude.ai/" }, "AI assistants", "claude", "ai"],
+  ["Gemini (not Google search)", { ref: "gemini.google.com/app" }, "AI assistants", "gemini", "ai"],
+  ["Copilot", { ref: "copilot.microsoft.com/" }, "AI assistants", "copilot", "ai"],
+  ["X via t.co", { ref: "t.co/abc" }, "Organic social", "x", "social"],
+  ["LinkedIn", { ref: "www.linkedin.com/feed/" }, "Organic social", "linkedin", "social"],
+  ["Reddit", { ref: "old.reddit.com/r/saas" }, "Organic social", "reddit", "social"],
+  ["Hacker News", { ref: "news.ycombinator.com/item" }, "Organic social", "hacker news", "social"],
+  ["Facebook link (fbclid alone is not paid)", { ref: "l.facebook.com/", clid: "fbclid" }, "Organic social", "facebook", "social"],
+  ["Gmail web", { ref: "mail.google.com/" }, "Email", "gmail", "email"],
+  ["newsletter tags", { utm: { source: "weekly", medium: "email", campaign: "Launch-Oct" } }, "Email", "weekly", "email"],
+  ["Google Ads by gclid", { ref: "www.google.com/", clid: "gclid" }, "Paid search", "google", "cpc"],
+  ["gclid without referrer", { clid: "gclid" }, "Paid search", "google", "cpc"],
+  ["Microsoft Ads", { clid: "msclkid" }, "Paid search", "bing", "cpc"],
+  ["tagged cpc on google", { utm: { source: "google", medium: "cpc", campaign: "brand" } }, "Paid search", "google", "cpc"],
+  ["paid social tags", { utm: { source: "linkedin", medium: "paid_social" } }, "Paid social", "linkedin", "paid_social"],
+  ["TikTok click id", { clid: "ttclid" }, "Paid social", "tiktok", "paid"],
+  ["display tags", { utm: { source: "gdn", medium: "display" } }, "Display", "gdn", "display"],
+  ["affiliate tags", { utm: { source: "partnerco", medium: "affiliate" } }, "Affiliates", "partnerco", "affiliate"],
+  ["retargeting elsewhere", { utm: { source: "adroll", medium: "retargeting" } }, "Paid other", "adroll", "retargeting"],
+  ["blog referral", { ref: "someblog.dev/post/1" }, "Referral", "someblog.dev", "referral"],
+  ["unknown medium", { utm: { source: "podcast", medium: "audio" } }, "Unassigned", "podcast", "audio"],
+];
+for (const [what, sig, channel, source, medium] of cases) {
+  const a = ch(sig);
+  assert.deepEqual([a.channel, a.source, a.medium], [channel, source, medium], what);
+}
+assert.equal(ch({ utm: { source: "Google", medium: "CPC", campaign: "Brand-Q4" } }).campaign, "brand-q4", "tags are case-normalised");
+assert.equal(ch({ ref: "someblog.dev/post/1", land: "/pricing" }).landing, "/pricing");
+assert.equal(ch(null).channel, "Direct");
+ok(`channels: ${cases.length} cases — search, AI assistants, social, email, paid (tags and click ids), display, affiliates, referral, direct, unassigned`);
 
 console.log(`\nAll ${step} agent-analytics unit checks passed.`);

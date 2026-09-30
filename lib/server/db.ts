@@ -131,6 +131,14 @@ create table if not exists aa_sessions (
   primary key (site_id, id)
 );
 create index if not exists aa_sessions_recent on aa_sessions(site_id, last_at desc);
+-- Attribution (where the session came from); first_touch = this browser's first channel/source/medium/campaign.
+alter table aa_sessions add column if not exists channel text;
+alter table aa_sessions add column if not exists source text;
+alter table aa_sessions add column if not exists medium text;
+alter table aa_sessions add column if not exists campaign text;
+alter table aa_sessions add column if not exists referrer text;
+alter table aa_sessions add column if not exists landing text;
+alter table aa_sessions add column if not exists first_touch jsonb;
 
 create table if not exists aa_batches (
   site_id text not null references aa_sites(id) on delete cascade,

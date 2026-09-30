@@ -1,3 +1,5 @@
+import type { SourceSignals } from "./attribution";
+
 /**
  * Events the browser SDK sends. Deliberately content-free: no keystroke values,
  * no form contents, no text — only timings, positions and counts.
@@ -21,7 +23,13 @@ export type AaEvent =
   | { t: "vis"; ts: number; hidden: boolean }
   | { t: "lv"; ts: number }
   | { t: "task"; ts: number; name: string; state: "start" | "complete" | "fail" }
-  | { t: "env"; ts: number; wd: boolean; hl: boolean; touch: boolean };
+  | { t: "env"; ts: number; wd: boolean; hl: boolean; touch: boolean }
+  /**
+   * Once per session: where it came from. Referrer as host + path (no query string),
+   * landing path, UTM tags, and the NAME of an ad click id if present (never its value).
+   * ft = this browser's first touch, kept for 90 days, same shape.
+   */
+  | ({ t: "src"; ts: number; ft?: SourceSignals } & SourceSignals);
 
 export interface CollectBatch {
   site: string;

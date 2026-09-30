@@ -213,14 +213,26 @@ ok("collect: CORS-open but rejects unknown sites, bad JSON, oversize batches and
 
 const humanEv = humanSession(7);
 const half = Math.floor(humanEv.length / 2);
-assert.equal((await post({ site: site.siteKey, sid: "aaaa000000000001", seq: 0, events: [...humanEv.slice(0, half), { t: "evil", ts: 1, payload: "x" }] })).status, 200);
-res = await post({ site: site.siteKey, sid: "aaaa000000000001", seq: 1, events: humanEv.slice(half) });
+// Where the human came from: Google search today, ChatGPT on their first visit. The query string and the
+// click id's value must never be stored; a later source event in the same session must not re-attribute it.
+const humanSrc = {
+  t: "src",
+  ts: humanEv[0].ts,
+  ref: "www.google.com/search?q=my+private+search",
+  land: "/pricing?coupon=SECRET",
+  clid: "gclid=abc123",
+  ft: { ref: "chatgpt.com/", land: "/" },
+  extra: "dropped",
+};
+assert.equal((await post({ site: site.siteKey, sid: "aaaa000000000001", seq: 0, events: [humanSrc, ...humanEv.slice(0, half), { t: "evil", ts: 1, payload: "x" }] })).status, 200);
+res = await post({ site: site.siteKey, sid: "aaaa000000000001", seq: 1, events: [{ t: "src", ts: humanEv[half].ts, ref: "l.facebook.com/" }, ...humanEv.slice(half)] });
 assert.equal(res.status, 200);
 const dup = (await (await post({ site: site.siteKey, sid: "aaaa000000000001", seq: 1, events: humanEv.slice(half) })).json()) as Any;
 assert.equal(dup.duplicate, true, "retried batches are idempotent");
 
 // An agent session carrying the verification token its page was served with.
-await post({ site: site.siteKey, sid: "bbbb000000000002", seq: 0, vt: vtApproved, events: agentSession(8) });
+const agentEv = agentSession(8);
+await post({ site: site.siteKey, sid: "bbbb000000000002", seq: 0, vt: vtApproved, events: [{ t: "src", ts: agentEv[0].ts, land: "/p/1", utm: { source: "chatgpt.com" } }, ...agentEv] });
 // An unverified agent (behaviour only), and a token forged for it.
 await post({ site: site.siteKey, sid: "cccc000000000003", seq: 0, vt: vtPending.replace(/.$/, (c: string) => (c === "A" ? "B" : "A")), events: agentSession(9, Date.now() - 4 * 60_000) });
 ok("SDK batches stored idempotently, unknown event kinds dropped, session rescored per batch");
@@ -257,6 +269,34 @@ assert.equal(overview.agents.find((a: Any) => a.name === "Fast").requests, 3);
 assert.equal(overview.daily.length, 7);
 assert.equal(overview.recentRequests.length, 10);
 ok("site dashboard: classes, tiers, agent share, verified share, task completion by class, failure reasons, top agents");
+
+// Attribution: every session, human or agent, has a source, a channel and a landing page.
+const row = (rows: Any[], key: string) => rows.find((r: Any) => r.key === key);
+const human1 = byId.aaaa000000000001;
+assert.deepEqual([human1.channel, human1.source, human1.medium], ["Organic search", "google", "organic"], "entry source kept for the whole session");
+assert.equal(human1.referrer, "www.google.com/search", "referrer query string dropped");
+assert.equal(human1.landing, "/pricing", "landing query string dropped");
+assert.equal(human1.firstTouch.channel, "AI assistants");
+assert.equal(byId.bbbb000000000002.channel, "AI assistants");
+assert.equal(byId.bbbb000000000002.source, "chatgpt", "tagged and referred ChatGPT traffic share one source name");
+assert.deepEqual([byId.cccc000000000003.channel, byId.cccc000000000003.source], ["Unassigned", "(not set)"], "sessions without source data are still counted");
+const a = overview.attribution;
+assert.deepEqual(
+  a.channels.map((r: Any) => [r.key, r.sessions, r.human, r.agent, r.verified, r.conversions.human, r.conversions.agent]),
+  [
+    ["AI assistants", 1, 0, 1, 1, 0, 1],
+    ["Organic search", 1, 1, 0, 0, 1, 0],
+    ["Unassigned", 1, 0, 1, 0, 0, 1],
+  ],
+);
+assert.deepEqual(row(a.firstTouchChannels, "AI assistants").sessions, 2, "first touch credits ChatGPT for the human's visit too");
+assert.equal(row(a.sources, "google / organic").human, 1);
+assert.equal(row(a.landingPages, "/pricing").conversions.total, 1);
+assert.equal(row(a.referrers, "www.google.com/search").sessions, 1);
+const dbq = async (sql: string) => (await (await import(new URL("../lib/server/db.ts", import.meta.url).href)).db()).query(sql);
+const stored = JSON.stringify((await dbq("select events from aa_batches where session_id = 'aaaa000000000001'")).rows);
+assert.ok(!/private|SECRET|abc123|dropped/.test(stored), "no query strings, click-id values or unknown fields stored");
+ok("attribution: channel, source/medium, campaign, landing page and referrer per session; human vs agent split and conversions per channel; last and first touch");
 
 const mine = (await (await agents.GET(alex.req("/api/aa/agents"))).json()) as Any;
 const shopper = mine.agents.find((a: Any) => a.id === agent.id);

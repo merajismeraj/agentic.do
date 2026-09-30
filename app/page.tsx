@@ -127,8 +127,8 @@ export default function Landing() {
             />
             <Pillar
               icon={<Target size={18} />}
-              title="Outcomes that matter"
-              body="Report tasks like checkout or sign-up and see which agents complete them, where they get challenged, and why verification failed."
+              title="Outcomes and attribution"
+              body="Every session, human or agent, gets a channel, source and campaign, including visits from ChatGPT, Perplexity and other AI assistants, with conversions per channel."
             />
           </div>
           <div className="mt-5 grid gap-5 md:grid-cols-3">
@@ -169,7 +169,7 @@ export default function Landing() {
           <ul className="mt-6 space-y-3 text-[15px]">
             {[
               "Add a site to get a public key and a server secret",
-              "Drop the 4 KB script on every page",
+              "Drop the 5 KB script on every page",
               "Verify signatures at your edge and pass the token to the page",
               'Report tasks with window.aa.task("checkout", "complete")',
             ].map((t, i) => (

@@ -192,3 +192,91 @@ export async function api<T>(path: string, init?: { method?: string; body?: unkn
   if (!res.ok) throw new Error((body as { error?: string }).error ?? `Request failed (${res.status})`);
   return body as T;
 }
+
+/* Attribution ------------------------------------------------------------ */
+
+export interface AttributionRow {
+  key: string;
+  sessions: number;
+  human: number;
+  agent: number;
+  verified: number;
+  uncertain: number;
+  conversions: { total: number; human: number; agent: number };
+}
+
+/** Who drove a group's sessions, as one thin stacked bar (fixed class order and colors). */
+export function MixBar({ row, className }: { row: AttributionRow; className?: string }) {
+  const parts: { cls: ActorClass; n: number }[] = [
+    { cls: "verified_agent", n: row.verified },
+    { cls: "agent", n: row.agent - row.verified },
+    { cls: "uncertain", n: row.uncertain },
+    { cls: "human", n: row.human },
+  ].filter((p) => p.n > 0) as { cls: ActorClass; n: number }[];
+  return (
+    <div className={cn("flex h-2 w-full gap-[2px] overflow-hidden rounded-full bg-surface-2", className)} role="img" aria-label={parts.map((p) => `${CLASS_META[p.cls].label} ${p.n}`).join(", ")}>
+      {parts.map((p) => (
+        <div
+          key={p.cls}
+          className="h-full first:rounded-l-full last:rounded-r-full"
+          style={{ width: `${(p.n / Math.max(1, row.sessions)) * 100}%`, background: CLASS_META[p.cls].color, minWidth: 3 }}
+          title={`${CLASS_META[p.cls].label}: ${num(p.n)} (${pct(p.n / Math.max(1, row.sessions))})`}
+        />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Sessions and conversions per channel / source / campaign / page, split by who drove them.
+ * A conversion is a session that completed at least one reported task.
+ */
+export function AttributionTable({ rows, dimension, empty }: { rows: AttributionRow[]; dimension: string; empty: string }) {
+  if (!rows.length) return <p className="py-6 text-center text-sm text-muted">{empty}</p>;
+  const total = rows.reduce((s, r) => s + r.sessions, 0);
+  return (
+    <div className="-mx-5 overflow-x-auto px-5">
+      <table className="w-full min-w-[720px] text-[13px]">
+        <thead className="text-left text-[11px] text-muted">
+          <tr>
+            <th className="py-1 font-medium">{dimension}</th>
+            <th className="py-1 text-right font-medium">Sessions</th>
+            <th className="w-[22%] py-1 pl-5 font-medium">Who drove them</th>
+            <th className="py-1 text-right font-medium">Human</th>
+            <th className="py-1 text-right font-medium">Agent</th>
+            <th className="py-1 text-right font-medium">Uncertain</th>
+            <th className="py-1 text-right font-medium" title="Sessions that completed at least one task">
+              Conversions
+            </th>
+            <th className="py-1 text-right font-medium">Human conv. rate</th>
+            <th className="py-1 text-right font-medium">Agent conv. rate</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.key} className="border-t border-line hover:bg-surface-2">
+              <td className="max-w-[16rem] truncate py-2 font-medium" title={r.key}>
+                {r.key}
+              </td>
+              <td className="py-2 text-right tabular-nums">
+                {num(r.sessions)} <span className="text-[11px] text-muted">{pct(r.sessions / Math.max(1, total))}</span>
+              </td>
+              <td className="py-2 pl-5">
+                <MixBar row={r} />
+              </td>
+              <td className="py-2 text-right tabular-nums">{num(r.human)}</td>
+              <td className="py-2 text-right tabular-nums">
+                {num(r.agent)}
+                {r.verified > 0 && <span className="ml-1 text-[11px] text-muted">{r.verified} verified</span>}
+              </td>
+              <td className="py-2 text-right tabular-nums">{num(r.uncertain)}</td>
+              <td className="py-2 text-right tabular-nums">{num(r.conversions.total)}</td>
+              <td className="py-2 text-right tabular-nums">{r.human ? pct(r.conversions.human / r.human) : "—"}</td>
+              <td className="py-2 text-right tabular-nums">{r.agent ? pct(r.conversions.agent / r.agent) : "—"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}

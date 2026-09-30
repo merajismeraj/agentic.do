@@ -3,7 +3,23 @@
 import { Activity, ExternalLink, Globe, Plus, Radar, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-import { api, BarList, ClassLabel, CLASS_META, CopyField, DailyChart, humanize, Kpi, Legend, num, pct, TIER_META, type ActorClass } from "@/components/aa";
+import {
+  api,
+  AttributionTable,
+  BarList,
+  ClassLabel,
+  CLASS_META,
+  CopyField,
+  DailyChart,
+  humanize,
+  Kpi,
+  Legend,
+  num,
+  pct,
+  TIER_META,
+  type ActorClass,
+  type AttributionRow,
+} from "@/components/aa";
 import { PageHeader } from "@/components/shell";
 import { Badge, Button, Card, Empty, Modal, Segmented } from "@/components/ui";
 import { useStore } from "@/lib/store";
@@ -40,12 +56,29 @@ interface SessionRow {
   segments: { from: number; to: number; state: "human" | "agent" }[];
   tasks: Record<string, { start: number; complete: number; fail: number }>;
   durationMs: number;
+  channel: string;
+  source: string;
+  medium: string;
+  campaign: string | null;
+  referrer: string | null;
+  landing: string | null;
+  firstTouch: { channel: string; source: string; medium: string; campaign: string | null } | null;
 }
+
+type Dimension = "channels" | "sources" | "campaigns" | "landingPages" | "referrers";
+const DIMENSIONS: { value: Dimension; label: string; column: string; empty: string }[] = [
+  { value: "channels", label: "Channels", column: "Channel", empty: "No sessions yet." },
+  { value: "sources", label: "Source / medium", column: "Source / medium", empty: "No sessions yet." },
+  { value: "campaigns", label: "Campaigns", column: "Campaign", empty: "No campaign-tagged sessions yet. Add utm_campaign to your links." },
+  { value: "landingPages", label: "Landing pages", column: "Landing page", empty: "No landing pages recorded yet." },
+  { value: "referrers", label: "Referrers", column: "Referrer", empty: "No referring sites yet." },
+];
 
 type Tally = { started: number; completed: number; failed: number; rate: number | null };
 
 interface Overview {
   days: number;
+  attribution: Record<Dimension, AttributionRow[]> & { firstTouchChannels: AttributionRow[] };
   totals: { sessions: number; agentShare: number | null; verifiedShare: number | null; hybrid: number; byClass: Record<ActorClass, number>; byTier: Record<string, number> };
   tasks: Record<ActorClass, Tally>;
   taskBreakdown: { name: string; agentStarted: number; agentCompleted: number; agentFailed: number; humanStarted: number; humanCompleted: number }[];
@@ -248,6 +281,8 @@ export default function AnalyticsPage() {
                 </Card>
               </div>
 
+              <Acquisition data={data} />
+
               <div className="grid gap-4 lg:grid-cols-2">
                 <Card className="min-w-0 p-5">
                   <h2 className="font-semibold">Tasks</h2>
@@ -324,11 +359,12 @@ export default function AnalyticsPage() {
                   </div>
                 </div>
                 <div className="-mx-5 overflow-x-auto px-5">
-                  <table className="w-full min-w-[640px] text-[13px]">
+                  <table className="w-full min-w-[760px] text-[13px]">
                     <thead className="text-left text-[11px] text-muted">
                       <tr>
                         <th className="py-1 font-medium">Last seen</th>
                         <th className="py-1 font-medium">Driven by</th>
+                        <th className="py-1 font-medium">Source</th>
                         <th className="py-1 text-right font-medium">P(agent)</th>
                         <th className="py-1 pl-5 font-medium">Tier</th>
                         <th className="py-1 font-medium">Agent</th>
@@ -345,6 +381,12 @@ export default function AnalyticsPage() {
                               <ClassLabel cls={s.cls} />
                               {s.hybrid && <Badge>hybrid</Badge>}
                             </span>
+                          </td>
+                          <td className="max-w-[12rem] py-2">
+                            <div className="truncate text-[13px]" title={`${s.source} / ${s.medium}`}>
+                              {s.source}
+                            </div>
+                            <div className="truncate text-[11px] text-muted">{s.channel}</div>
                           </td>
                           <td className="py-2 text-right tabular-nums">{s.pAgent.toFixed(2)}</td>
                           <td className="py-2 pl-5 font-mono text-[12px]">{s.tier}</td>
@@ -468,7 +510,7 @@ function Kpis({ data }: { data: Overview }) {
   const agentTasks = [data.tasks.verified_agent, data.tasks.agent].reduce((s, t) => ({ started: s.started + t.started, completed: s.completed + t.completed }), { started: 0, completed: 0 });
   return (
     <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-      <Kpi label="Sessions" value={num(data.totals.sessions)} sub={`${data.totals.byClass.uncertain} uncertain`} />
+      <Kpi label="Sessions" value={num(data.totals.sessions)} sub={`${num(data.totals.byClass.human)} human · ${num(data.totals.byClass.uncertain)} uncertain`} />
       <Kpi label="Agent share" value={pct(data.totals.agentShare)} sub="of sessions were driven by an agent" />
       <Kpi label="Verified agents" value={pct(data.totals.verifiedShare)} sub="of agent sessions proved their identity" />
       <Kpi
@@ -477,6 +519,39 @@ function Kpis({ data }: { data: Overview }) {
         sub={data.tasks.human.rate != null ? `Humans: ${pct(data.tasks.human.rate)}` : "No human tasks yet"}
       />
     </div>
+  );
+}
+
+function Acquisition({ data }: { data: Overview }) {
+  const [dim, setDim] = useState<Dimension>("channels");
+  const [model, setModel] = useState<"last" | "first">("last");
+  const d = DIMENSIONS.find((x) => x.value === dim)!;
+  const rows = dim === "channels" && model === "first" ? data.attribution.firstTouchChannels : data.attribution[dim];
+  return (
+    <Card className="min-w-0 p-5">
+      <h2 className="font-semibold">Acquisition</h2>
+      <p className="mb-3 text-[12px] text-muted">
+        Where sessions came from, and who drove them. A conversion is a session that completed a task.
+        {dim === "channels" && (model === "last" ? " Last touch: the channel that started the session." : " First touch: the channel that first brought this browser (90 days).")}
+      </p>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <Segmented className="max-w-full overflow-x-auto" value={dim} onChange={setDim} options={DIMENSIONS.map((x) => ({ value: x.value, label: x.label }))} />
+        {dim === "channels" && (
+          <Segmented
+            value={model}
+            onChange={setModel}
+            options={[
+              { value: "last", label: "Last touch" },
+              { value: "first", label: "First touch" },
+            ]}
+          />
+        )}
+      </div>
+      <div className="mb-3">
+        <Legend />
+      </div>
+      <AttributionTable rows={rows} dimension={d.column} empty={d.empty} />
+    </Card>
   );
 }
 
@@ -645,6 +720,26 @@ function SessionDetail({ session, onClose }: { session: SessionRow | null; onClo
           ) : (
             <p className="text-muted">Not enough behaviour recorded yet.</p>
           )}
+        </div>
+        <div>
+          <div className="mb-2 text-[12px] font-medium text-muted">Where it came from</div>
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-[12px] sm:grid-cols-3">
+            {[
+              ["Channel", s.channel],
+              ["Source / medium", `${s.source} / ${s.medium}`],
+              ["Campaign", s.campaign ?? "—"],
+              ["Referrer", s.referrer ?? "—"],
+              ["Landing page", s.landing ?? "—"],
+              ["First touch", s.firstTouch ? `${s.firstTouch.channel} · ${s.firstTouch.source}` : "—"],
+            ].map(([k, v]) => (
+              <div key={k} className="min-w-0">
+                <dt className="text-muted">{k}</dt>
+                <dd className="truncate" title={v}>
+                  {v}
+                </dd>
+              </div>
+            ))}
+          </dl>
         </div>
         <div className="grid grid-cols-3 gap-2 text-[12px]">
           <div>

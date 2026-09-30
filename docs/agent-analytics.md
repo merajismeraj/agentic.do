@@ -37,7 +37,7 @@ The LLR curves are hand-set in v0 and tested on synthetic sessions and live Play
    ```html
    <script src="https://YOUR_APP/aa.js" data-site="aa_pk_…" defer></script>
    ```
-   3.8 KB. It records timings, pointer positions and counts, never keystroke values, form contents or page text.
+   Under 5 KB. It records timings, pointer positions and counts, never keystroke values, form contents or page text, plus where each session came from (see Attribution).
 3. **Verify at your edge** (recommended). Forward each page request and embed the returned token as `data-vt` on the script tag, so the browser session inherits the verified identity:
    ```ts
    // Cloudflare Worker / Next.js proxy / any server
@@ -70,9 +70,19 @@ npx tsx scripts/aa-agent.mts --key ./my-agent-private-key.json --registry http:/
 
 Builders see their agent's outcomes aggregated across sites: requests, sites reached, acceptance rate, why verification failed, and task success. Individual sites are never named.
 
+## Attribution
+
+Every session, human or agent, gets a **channel**, **source / medium**, **campaign**, **referrer** and **landing page**, taken from the page that started it (a session keeps its entry source; a return from a payment page doesn't re-attribute it).
+
+- **Signals** (collected once per session by the SDK): referrer reduced to host + path, landing path, `utm_source/medium/campaign/term/content`, and the *name* of an ad click id if present (`gclid`, `msclkid`, `fbclid`, `ttclid`, `li_fat_id`, …, never its value). Same-site referrers count as none.
+- **Channels** (`lib/aa/attribution.ts`), in order: AI assistants (ChatGPT, Perplexity, Claude, Gemini, Copilot, … by referrer or tag), Paid search / Paid social / Paid other (paid mediums, or search/social click ids), Display, Affiliates, Email, Organic search, Organic social, Referral, Direct, Unassigned (tagged but unrecognised). Tagged and referred traffic share one source name (`utm_source=chatgpt.com` and a chatgpt.com referrer are both `chatgpt`).
+- **Models:** *last touch* is the channel that started the session; *first touch* is the channel that first brought this browser, remembered for 90 days in `localStorage` as channel-level signals only (no identifier).
+- **Reports** (Agent analytics → Acquisition): channels, source / medium, campaigns, landing pages and referrers, each split into human, agent (verified shown separately) and uncertain sessions, with conversions (sessions that completed a task) and conversion rate for humans and agents.
+
 ## Data & privacy
 
 - The SDK sends no content. IPs are stored only as a daily-rotating salted hash.
+- Attribution drops query strings from referrers and landing pages (they can carry personal data), keeps UTM values to 100 characters, and records ad click ids by name only.
 - Raw behavioural batches are kept 30 days; session scores and aggregates are kept longer.
 - Nonces are single-use across instances (a Postgres unique key), and a forged request never consumes a real nonce.
 - Only directories in `AA_TRUSTED_DIRECTORIES` are ever fetched, so a request can't point us at arbitrary hosts (no SSRF).

@@ -1,4 +1,5 @@
 import "server-only";
+import { CHANNELS, type Channel, type Touch } from "@/lib/aa/attribution";
 import type { Evidence, Segment, TaskTally } from "@/lib/aa/scoring";
 import { TIERS, type Tier } from "@/lib/aa/verifier";
 import { db } from "../db";
@@ -22,6 +23,50 @@ export interface SessionRow {
   segments: Segment[];
   tasks: Record<string, TaskTally>;
   durationMs: number;
+  channel: Channel;
+  source: string;
+  medium: string;
+  campaign: string | null;
+  referrer: string | null;
+  landing: string | null;
+  firstTouch: Touch | null;
+}
+
+/** One row of an attribution report: sessions and conversions from one channel / source / campaign / page, by actor. */
+export interface AttributionRow {
+  key: string;
+  sessions: number;
+  human: number;
+  agent: number;
+  verified: number;
+  uncertain: number;
+  /** Sessions that completed at least one task. */
+  conversions: { total: number; human: number; agent: number };
+}
+
+const converted = (s: SessionRow) => Object.values(s.tasks).some((t) => t.complete > 0);
+
+/** Group sessions by a dimension; agent includes verified agents. Sorted by sessions. */
+export function breakdown(sessions: SessionRow[], keyOf: (s: SessionRow) => string | null, limit = 50): AttributionRow[] {
+  const rows = new Map<string, AttributionRow>();
+  for (const s of sessions) {
+    const key = keyOf(s);
+    if (key == null) continue;
+    const r = rows.get(key) ?? { key, sessions: 0, human: 0, agent: 0, verified: 0, uncertain: 0, conversions: { total: 0, human: 0, agent: 0 } };
+    r.sessions++;
+    const isAgent = s.cls === "agent" || s.cls === "verified_agent";
+    if (s.cls === "human") r.human++;
+    else if (isAgent) r.agent++;
+    else r.uncertain++;
+    if (s.cls === "verified_agent") r.verified++;
+    if (converted(s)) {
+      r.conversions.total++;
+      if (s.cls === "human") r.conversions.human++;
+      else if (isAgent) r.conversions.agent++;
+    }
+    rows.set(key, r);
+  }
+  return [...rows.values()].sort((a, b) => b.sessions - a.sessions || a.key.localeCompare(b.key)).slice(0, limit);
 }
 
 export interface RequestRow {
@@ -57,9 +102,17 @@ function tally(sessions: SessionRow[]) {
 export async function siteOverview(siteId: string, days = 7) {
   const since = new Date(Date.now() - days * 86_400_000);
   const d = await db();
-  const { rows: raw } = await d.query<Omit<SessionRow, "cls" | "evidence" | "segments" | "tasks" | "durationMs"> & { score: Record<string, unknown> | null }>(
+  const { rows: raw } = await d.query<
+    Omit<SessionRow, "cls" | "evidence" | "segments" | "tasks" | "durationMs" | "channel" | "source" | "medium"> & {
+      score: Record<string, unknown> | null;
+      channel: Channel | null;
+      source: string | null;
+      medium: string | null;
+    }
+  >(
     `select s.id, s.started_at as "startedAt", s.last_at as "lastAt", s.tier, s.agent_id as "agentId", a.name as "agentName",
-       s.p_agent as "pAgent", s.label, s.hybrid, s.pages, s.ua, s.score
+       s.p_agent as "pAgent", s.label, s.hybrid, s.pages, s.ua, s.score,
+       s.channel, s.source, s.medium, s.campaign, s.referrer, s.landing, s.first_touch as "firstTouch"
      from aa_sessions s left join aa_agents a on a.id = s.agent_id
      where s.site_id = $1 and s.last_at > $2 order by s.last_at desc limit 3000`,
     [siteId, since],
@@ -72,6 +125,10 @@ export async function siteOverview(siteId: string, days = 7) {
     segments: (score?.segments as Segment[]) ?? [],
     tasks: (score?.tasks as Record<string, TaskTally>) ?? {},
     durationMs: Number(score?.durationMs ?? 0),
+    // Sessions from before attribution existed (or an old SDK) have no source event.
+    channel: s.channel ?? "Unassigned",
+    source: s.source ?? "(not set)",
+    medium: s.medium ?? "(not set)",
   }));
 
   const byClass = Object.fromEntries(CLASSES.map((c) => [c, sessions.filter((s) => s.cls === c)])) as Record<ActorClass, SessionRow[]>;
@@ -146,8 +203,21 @@ export async function siteOverview(siteId: string, days = 7) {
     byTier: Object.fromEntries(TIERS.map((t) => [t, reqAgg.filter((r) => r.tier === t).reduce((s, r) => s + r.n, 0)])) as Record<Tier, number>,
   };
 
+  const channelOrder = (rows: AttributionRow[]) => rows.sort((a, b) => b.sessions - a.sessions || CHANNELS.indexOf(a.key as Channel) - CHANNELS.indexOf(b.key as Channel));
+  const attribution = {
+    /** Last touch: the channel that started each session. */
+    channels: channelOrder(breakdown(sessions, (s) => s.channel)),
+    /** First touch: the channel that first brought this browser (kept 90 days). */
+    firstTouchChannels: channelOrder(breakdown(sessions, (s) => s.firstTouch?.channel ?? s.channel)),
+    sources: breakdown(sessions, (s) => `${s.source} / ${s.medium}`, 25),
+    campaigns: breakdown(sessions, (s) => s.campaign, 25),
+    landingPages: breakdown(sessions, (s) => s.landing, 25),
+    referrers: breakdown(sessions, (s) => s.referrer, 25),
+  };
+
   return {
     days,
+    attribution,
     totals: {
       sessions: sessions.length,
       agentShare: sessions.length ? agentSessions.length / sessions.length : null,
