@@ -1,7 +1,8 @@
 import { errorResponse, requireUser } from "@/lib/server/auth";
 import { agentCard, createAgent, listAgents } from "@/lib/server/aa/registry";
 import { agentOutcomes } from "@/lib/server/aa/stats";
-import { isAaAdmin, registryOrigin } from "@/lib/server/aa/util";
+import { registryOrigin } from "@/lib/server/aa/util";
+import { isRegistryReviewer } from "@/lib/server/admin";
 import { requireWorkspace } from "@/lib/server/workspace";
 
 export const runtime = "nodejs";
@@ -16,7 +17,7 @@ export async function GET(req: Request) {
     const agents = await listAgents(ws.id);
     return Response.json({
       origin,
-      admin: isAaAdmin(user.email),
+      admin: isRegistryReviewer(user),
       agents: await Promise.all(agents.map(async (a) => ({ ...a, card: agentCard(a, origin), outcomes: await agentOutcomes(a.id) }))),
     });
   } catch (e) {

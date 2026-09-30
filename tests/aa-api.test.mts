@@ -62,6 +62,8 @@ const wellKnown = await route("app/.well-known/http-message-signatures-directory
 const perAgentDir = await route("app/r/[agentId]/route.ts");
 const card = await route("app/r/[agentId]/card/route.ts");
 
+const dbq = async (sql: string, params?: unknown[]) => (await (await import(new URL("../lib/server/db.ts", import.meta.url).href)).db()).query(sql, params);
+
 async function account(email: string) {
   const b = new Browser();
   const res = b.take(await signup.POST(b.req("/api/auth/signup", { method: "POST", body: { email, password: "correct horse battery", name: email.split("@")[0] } })));
@@ -163,6 +165,9 @@ ok("replayed signature (same nonce) → rejected as replay, challenged");
 res = await agentOne.PATCH(alex.req(`/api/aa/agents/${agent.id}`, { method: "PATCH", body: { status: "approved" } }), { params: Promise.resolve({ id: agent.id }) });
 assert.equal(res.status, 403, "operators can't approve their own agents");
 assert.equal((await review.GET(alex.req("/api/aa/review"))).status, 403);
+// Listed but unconfirmed: someone could have signed up with the reviewer's address first.
+assert.equal((await review.GET(reviewer.req("/api/aa/review"))).status, 403, "unconfirmed reviewer email is refused");
+await dbq("update users set email_verified_at = now() where email = 'reviewer@registry.test'");
 const queue = (await (await review.GET(reviewer.req("/api/aa/review"))).json()) as Any;
 assert.equal(queue.agents[0].id, agent.id);
 res = await agentOne.PATCH(reviewer.req(`/api/aa/agents/${agent.id}`, { method: "PATCH", body: { status: "approved", note: "KYB ok" } }), { params: Promise.resolve({ id: agent.id }) });
@@ -171,7 +176,7 @@ v = await callVerify(await signed());
 assert.equal(v.body.tier, "T3");
 assert.equal(v.body.agent.status, "approved");
 const vtApproved = v.body.vt;
-ok("registry reviewer approves (operators can't self-approve) → next request is T3 Registered");
+ok("registry reviewer (confirmed email only) approves (operators can't self-approve) → next request is T3 Registered");
 
 v = await callVerify(await signed("https://evil.test/products/42"));
 assert.equal(v.body.verification.reason, "bad_signature");
@@ -293,7 +298,6 @@ assert.deepEqual(row(a.firstTouchChannels, "AI assistants").sessions, 2, "first 
 assert.equal(row(a.sources, "google / organic").human, 1);
 assert.equal(row(a.landingPages, "/pricing").conversions.total, 1);
 assert.equal(row(a.referrers, "www.google.com/search").sessions, 1);
-const dbq = async (sql: string) => (await (await import(new URL("../lib/server/db.ts", import.meta.url).href)).db()).query(sql);
 const stored = JSON.stringify((await dbq("select events from aa_batches where session_id = 'aaaa000000000001'")).rows);
 assert.ok(!/private|SECRET|abc123|dropped/.test(stored), "no query strings, click-id values or unknown fields stored");
 ok("attribution: channel, source/medium, campaign, landing page and referrer per session; human vs agent split and conversions per channel; last and first touch");

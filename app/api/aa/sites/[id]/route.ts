@@ -1,5 +1,5 @@
 import { errorResponse, HttpError, requireUser } from "@/lib/server/auth";
-import { deleteSite, getSite, rotateSecret } from "@/lib/server/aa/sites";
+import { deleteSite, getSite, renameSite, rotateSecret } from "@/lib/server/aa/sites";
 import { siteOverview } from "@/lib/server/aa/stats";
 import { requireWorkspace } from "@/lib/server/workspace";
 
@@ -22,14 +22,19 @@ export async function GET(req: Request, { params }: Ctx) {
   }
 }
 
-/** { action: "rotate_secret" } returns a new server secret once. */
+/** { action: "rotate_secret" } returns a new server secret once; { action: "rename", name } renames. */
 export async function POST(req: Request, { params }: Ctx) {
   try {
     const user = await requireUser(req);
     const ws = await requireWorkspace(user.id);
-    const { action } = (await req.json()) as { action?: string };
+    const { action, name } = (await req.json()) as { action?: string; name?: string };
+    const id = (await params).id;
+    if (action === "rename") {
+      await renameSite(ws.id, id, name ?? "");
+      return Response.json({ site: await getSite(ws.id, id) });
+    }
     if (action !== "rotate_secret") throw new HttpError(400, "Unknown action");
-    return Response.json({ secret: await rotateSecret(ws.id, (await params).id) });
+    return Response.json({ secret: await rotateSecret(ws.id, id) });
   } catch (e) {
     return errorResponse(e);
   }

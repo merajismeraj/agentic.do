@@ -128,8 +128,9 @@ export function Modal({
         role="dialog"
         aria-modal
         className={cn(
-          "animate-pop relative max-h-[92vh] w-full overflow-auto rounded-t-2xl border border-line bg-surface shadow-pop sm:max-w-lg sm:rounded-2xl",
-          className,
+          "animate-pop relative max-h-[92vh] w-full overflow-auto rounded-t-2xl border border-line bg-surface shadow-pop sm:rounded-2xl",
+          // cn() doesn't merge Tailwind classes, so only apply the default width when none is given.
+          /max-w-/.test(className ?? "") ? className : cn("sm:max-w-lg", className),
         )}
       >
         {title && (

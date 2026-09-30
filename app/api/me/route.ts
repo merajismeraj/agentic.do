@@ -1,3 +1,4 @@
+import { isSuperAdmin } from "@/lib/server/admin";
 import { currentUser, errorResponse } from "@/lib/server/auth";
 import { googleConfigured } from "@/lib/server/google";
 import { emailConfigured } from "@/lib/server/mailer";
@@ -13,7 +14,7 @@ export async function GET(req: Request) {
     const user = await currentUser(req);
     if (!user) return Response.json({ user: null, server }, { status: 401 });
     await ensureWorkspace(user.id);
-    return Response.json({ user, server });
+    return Response.json({ user: { ...user, superAdmin: isSuperAdmin(user) }, server });
   } catch (e) {
     return errorResponse(e);
   }

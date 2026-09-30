@@ -49,10 +49,3 @@ export const trustedExternalDirectories = () =>
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
-
-export const isAaAdmin = (email: string) =>
-  (process.env.AA_ADMIN_EMAILS ?? "")
-    .split(",")
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean)
-    .includes(email.toLowerCase());

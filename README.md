@@ -21,7 +21,7 @@ Without `DATABASE_URL`, data lives in an embedded Postgres (PGlite) under `.data
 
 1. Import the repo into Vercel.
 2. Connect Supabase through Vercel's Supabase integration (or set `DATABASE_URL` to the transaction pooler, port 6543). Tables are created on first request.
-3. Set `SESSION_SECRET`, `APP_URL`, and for email `RESEND_API_KEY` + `EMAIL_FROM`. Optionally `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`, `AA_ADMIN_EMAILS`, `AA_TRUSTED_DIRECTORIES`.
+3. Set `SESSION_SECRET`, `APP_URL`, and for email `RESEND_API_KEY` + `EMAIL_FROM`. Optionally `SUPER_ADMIN_EMAILS` (the admin dashboard), `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`, `AA_ADMIN_EMAILS`, `AA_TRUSTED_DIRECTORIES`.
 4. Check `GET /api/health`: it reports what's configured and whether the database answers, never secret values.
 
 ## Code map
@@ -29,7 +29,8 @@ Without `DATABASE_URL`, data lives in an embedded Postgres (PGlite) under `.data
 | Path | What |
 | --- | --- |
 | `app/page.tsx` | Landing page |
-| `app/app/analytics/` | Site dashboard and agent registry |
+| `app/app/analytics/` | Dashboard per site or app, and the agent registry. Each account can add up to 100 sites and apps: websites, web apps, mobile apps (bundle id + API host) and APIs |
+| `app/app/admin/`, `app/api/admin/*`, `lib/server/admin.ts` | Super admin dashboard (`SUPER_ADMIN_EMAILS`, confirmed email only): every account with its sites, apps, agents and traffic. Read-only; never shows keys or secrets |
 | `app/api/aa/*`, `lib/server/aa/`, `lib/aa/` | Analytics and verification (see the doc above) |
 | `sdk/aa.ts` → `public/aa.js` | Browser SDK (`npm run sdk:build`, also run on `prebuild`) |
 | `app/api/auth/*`, `lib/server/auth.ts`, `lib/server/account.ts` | Accounts: scrypt passwords, hashed session tokens, email verification, password reset, "Continue with Google" |

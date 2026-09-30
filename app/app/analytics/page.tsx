@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, ExternalLink, Globe, Plus, Radar, Trash2 } from "lucide-react";
+import { Activity, Check, ChevronsUpDown, ExternalLink, Globe, Plus, Radar, Search, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import {
@@ -12,6 +12,8 @@ import {
   CopyField,
   DailyChart,
   humanize,
+  KIND_META,
+  KIND_ORDER,
   Kpi,
   Legend,
   num,
@@ -19,6 +21,7 @@ import {
   TIER_META,
   type ActorClass,
   type AttributionRow,
+  type PropertyKind,
 } from "@/components/aa";
 import { PageHeader } from "@/components/shell";
 import { Badge, Button, Card, Empty, Modal, Segmented } from "@/components/ui";
@@ -28,7 +31,9 @@ import { ago, cn } from "@/lib/utils";
 interface Site {
   id: string;
   name: string;
+  kind: PropertyKind;
   domain: string;
+  appId: string | null;
   siteKey: string;
   secret?: string;
 }
@@ -95,6 +100,7 @@ const DECISION_TONE: Record<string, "ok" | "warn" | "danger"> = { allow: "ok", r
 export default function AnalyticsPage() {
   const { mode, toast } = useStore();
   const [sites, setSites] = useState<Site[] | null>(null);
+  const [limit, setLimit] = useState(100);
   const [siteId, setSiteId] = useState<string | null>(null);
   const [days, setDays] = useState<"1" | "7" | "30">("7");
   const [data, setData] = useState<Overview | null>(null);
@@ -104,8 +110,9 @@ export default function AnalyticsPage() {
   const [session, setSession] = useState<SessionRow | null>(null);
 
   const loadSites = useCallback(async () => {
-    const { sites } = await api<{ sites: Site[] }>("/api/aa/sites");
+    const { sites, limit } = await api<{ sites: Site[]; limit: number }>("/api/aa/sites");
     setSites(sites);
+    setLimit(limit);
     let saved: string | null = null;
     try {
       saved = localStorage.getItem(SITE_PREF);
@@ -168,36 +175,18 @@ export default function AnalyticsPage() {
         title="Agent analytics"
         subtitle="Agents are a customer channel, not a fraud category. See who acts on your site, who they act for, and whether they finish."
         actions={
-          sites?.length ? (
-            <>
-              <select
-                value={siteId ?? ""}
-                onChange={(e) => setSiteId(e.target.value)}
-                className="h-9 rounded-lg border border-line bg-surface px-2.5 text-sm shadow-sm"
-                aria-label="Site"
-              >
-                {sites.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name} · {s.domain}
-                  </option>
-                ))}
-              </select>
-              <Button onClick={() => setAdding(true)} aria-label="Add site">
-                <Plus size={15} />
-              </Button>
-            </>
-          ) : null
+          sites?.length ? <PropertySwitcher sites={sites} current={site} limit={limit} onSelect={setSiteId} onAdd={() => setAdding(true)} /> : null
         }
       />
 
       {sites && !sites.length && (
         <Empty
           icon={<Globe size={20} />}
-          title="Track your first site"
-          body="Add a site, drop one script tag on it, and optionally call the verify API from your edge. Or try it on the built-in demo store."
+          title="Track your first site or app"
+          body={`Add a website, web app, mobile app or API (up to ${limit}). Websites and web apps get one script tag; every kind can verify signed agents from your server. Or try it on the built-in demo store.`}
           action={
             <Button variant="primary" onClick={() => setAdding(true)}>
-              <Plus size={15} /> Add a site
+              <Plus size={15} /> Add a site or app
             </Button>
           }
         />
@@ -216,13 +205,15 @@ export default function AnalyticsPage() {
               ]}
             />
             <div className="ml-auto flex gap-2">
-              <a href={`/aa/demo/${site.siteKey}`} target="_blank" rel="noreferrer">
-                <Button size="sm" variant="ghost">
-                  <ExternalLink size={14} /> Demo store
-                </Button>
-              </a>
+              {!KIND_META[site.kind].app || site.kind === "web_app" ? (
+                <a href={`/aa/demo/${site.siteKey}`} target="_blank" rel="noreferrer">
+                  <Button size="sm" variant="ghost">
+                    <ExternalLink size={14} /> Demo store
+                  </Button>
+                </a>
+              ) : null}
               <Button size="sm" onClick={() => setInstall(site)}>
-                Install
+                {site.kind === "website" || site.kind === "web_app" ? "Install" : "Set up"}
               </Button>
             </div>
           </div>
@@ -233,13 +224,19 @@ export default function AnalyticsPage() {
             <Empty
               icon={<Activity size={20} />}
               title="Waiting for traffic"
-              body={`Nothing from ${site.domain} yet. Install the snippet, or open the demo store and browse it yourself — then run an agent against it.`}
+              body={
+                site.kind === "website" || site.kind === "web_app"
+                  ? `Nothing from ${site.domain} yet. Install the snippet, or open the demo store and browse it yourself — then run an agent against it.`
+                  : `Nothing from ${site.appId ?? site.domain} yet. Call the verify API from ${site.domain}'s backend for each request, and signed agents show up here.`
+              }
               action={
                 <div className="flex gap-2">
-                  <Button onClick={() => setInstall(site)}>Install</Button>
-                  <a href={`/aa/demo/${site.siteKey}`} target="_blank" rel="noreferrer">
-                    <Button variant="primary">Open demo store</Button>
-                  </a>
+                  <Button onClick={() => setInstall(site)}>{site.kind === "website" || site.kind === "web_app" ? "Install" : "Set up"}</Button>
+                  {(site.kind === "website" || site.kind === "web_app") && (
+                    <a href={`/aa/demo/${site.siteKey}`} target="_blank" rel="noreferrer">
+                      <Button variant="primary">Open demo store</Button>
+                    </a>
+                  )}
                 </div>
               }
             />
@@ -476,7 +473,7 @@ export default function AnalyticsPage() {
                 if (!confirm(`Delete ${site.name} and all its analytics?`)) return;
                 try {
                   await api(`/api/aa/sites/${site.id}`, { method: "DELETE" });
-                  toast("Site deleted");
+                  toast(`${site.name} deleted`);
                   setSiteId(null);
                   loadSites();
                 } catch (e) {
@@ -484,13 +481,15 @@ export default function AnalyticsPage() {
                 }
               }}
             >
-              <Trash2 size={14} /> Delete site
+              <Trash2 size={14} /> Delete {KIND_META[site.kind].noun}
             </Button>
           </div>
         </>
       )}
 
       <AddSite
+        used={sites?.length ?? 0}
+        limit={limit}
         open={adding}
         onClose={() => setAdding(false)}
         onCreated={(s) => {
@@ -559,22 +558,27 @@ function StatusBadge({ status }: { status: string }) {
   return <Badge tone={status === "approved" ? "ok" : status === "suspended" ? "danger" : "warn"}>{status}</Badge>;
 }
 
-function AddSite({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: (s: Site) => void }) {
+function AddSite({ open, onClose, onCreated, used, limit }: { open: boolean; onClose: () => void; onCreated: (s: Site) => void; used: number; limit: number }) {
   const { toast } = useStore();
+  const [kind, setKind] = useState<PropertyKind>("website");
   const [name, setName] = useState("");
   const [domain, setDomain] = useState("");
+  const [appId, setAppId] = useState("");
   const [busy, setBusy] = useState(false);
+  const meta = KIND_META[kind];
+  const full = used >= limit;
   return (
-    <Modal open={open} onClose={onClose} title="Add a site">
+    <Modal open={open} onClose={onClose} title="Add a site or app">
       <form
         className="space-y-4 p-5"
         onSubmit={async (e) => {
           e.preventDefault();
           setBusy(true);
           try {
-            const { site } = await api<{ site: Site }>("/api/aa/sites", { method: "POST", body: { name, domain } });
+            const { site } = await api<{ site: Site }>("/api/aa/sites", { method: "POST", body: { kind, name, domain, appId: kind === "mobile_app" ? appId : undefined } });
             setName("");
             setDomain("");
+            setAppId("");
             onCreated(site);
           } catch (err) {
             toast((err as Error).message);
@@ -583,33 +587,158 @@ function AddSite({ open, onClose, onCreated }: { open: boolean; onClose: () => v
           }
         }}
       >
+        <fieldset>
+          <legend className="mb-1.5 text-[13px] font-medium">What are you adding?</legend>
+          <div className="grid grid-cols-2 gap-2">
+            {KIND_ORDER.map((k) => {
+              const m = KIND_META[k];
+              const Icon = m.icon;
+              return (
+                <label
+                  key={k}
+                  className={cn(
+                    "flex cursor-pointer items-start gap-2.5 rounded-xl border p-3 transition-colors",
+                    kind === k ? "border-accent bg-accent-soft/40" : "border-line hover:border-line-strong",
+                  )}
+                >
+                  <input type="radio" name="kind" value={k} checked={kind === k} onChange={() => setKind(k)} className="sr-only" />
+                  <Icon size={16} className={cn("mt-0.5 shrink-0", kind === k ? "text-accent" : "text-muted")} />
+                  <span className="min-w-0">
+                    <span className="block text-[13px] font-medium">{m.label}</span>
+                    <span className="block text-[12px] leading-snug text-muted">{m.blurb}</span>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        </fieldset>
         <label className="block">
           <span className="mb-1 block text-[13px] font-medium">Name</span>
-          <input value={name} onChange={(e) => setName(e.target.value)} required placeholder="Northstar shop" className="h-10 w-full rounded-lg border border-line bg-surface px-3 text-sm" />
+          <input value={name} onChange={(e) => setName(e.target.value)} required maxLength={80} placeholder={meta.namePlaceholder} className="h-10 w-full rounded-lg border border-line bg-surface px-3 text-sm" />
         </label>
+        {kind === "mobile_app" && (
+          <label className="block">
+            <span className="mb-1 block text-[13px] font-medium">Bundle ID / package name</span>
+            <input value={appId} onChange={(e) => setAppId(e.target.value)} required placeholder="com.example.shop" className="h-10 w-full rounded-lg border border-line bg-surface px-3 font-mono text-sm" />
+          </label>
+        )}
         <label className="block">
-          <span className="mb-1 block text-[13px] font-medium">Domain</span>
-          <input value={domain} onChange={(e) => setDomain(e.target.value)} required placeholder="shop.example.com" className="h-10 w-full rounded-lg border border-line bg-surface px-3 text-sm" />
-          <span className="mt-1 block text-[12px] text-muted">Signatures are bound to a host, so the verify API only checks requests for this domain and its subdomains.</span>
+          <span className="mb-1 block text-[13px] font-medium">{meta.domainLabel}</span>
+          <input value={domain} onChange={(e) => setDomain(e.target.value)} required placeholder={meta.domainPlaceholder} className="h-10 w-full rounded-lg border border-line bg-surface px-3 text-sm" />
+          <span className="mt-1 block text-[12px] text-muted">{meta.domainHint}</span>
         </label>
-        <div className="flex justify-end gap-2">
-          <Button type="button" variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button type="submit" variant="primary" disabled={busy}>
-            Add site
-          </Button>
+        <div className="flex items-center justify-between gap-3">
+          <span className={cn("text-[12px] tabular-nums", full ? "text-danger" : "text-muted")}>
+            {full ? `You've reached ${limit} sites and apps. Delete one to add another.` : `${used} of ${limit} used`}
+          </span>
+          <div className="flex gap-2">
+            <Button type="button" variant="ghost" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="primary" disabled={busy || full}>
+              Add {meta.label.toLowerCase()}
+            </Button>
+          </div>
         </div>
       </form>
     </Modal>
   );
 }
 
+/** Searchable switcher across up to 100 sites and apps. */
+function PropertySwitcher({ sites, current, limit, onSelect, onAdd }: { sites: Site[]; current: Site | null; limit: number; onSelect: (id: string) => void; onAdd: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const needle = q.trim().toLowerCase();
+  const shown = sites.filter((s) => !needle || `${s.name} ${s.domain} ${s.appId ?? ""}`.toLowerCase().includes(needle));
+  const groups = [
+    { title: "Sites", rows: shown.filter((s) => s.kind === "website") },
+    { title: "Apps", rows: shown.filter((s) => s.kind !== "website") },
+  ].filter((g) => g.rows.length);
+  const Icon = current ? KIND_META[current.kind].icon : Globe;
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        className="flex h-9 max-w-[18rem] items-center gap-2 rounded-lg border border-line bg-surface px-2.5 text-sm shadow-sm hover:border-line-strong"
+      >
+        <Icon size={15} className="shrink-0 text-muted" />
+        <span className="truncate font-medium">{current?.name ?? "Choose"}</span>
+        <span className="hidden truncate text-muted sm:inline">{current?.domain}</span>
+        <ChevronsUpDown size={14} className="ml-auto shrink-0 text-muted" />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="animate-pop absolute right-0 z-50 mt-1 w-[min(22rem,calc(100vw-2rem))] rounded-xl border border-line bg-surface shadow-pop">
+            <div className="flex items-center gap-2 border-b border-line px-3">
+              <Search size={14} className="text-muted" />
+              <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search sites and apps" className="h-10 w-full bg-transparent text-sm outline-none" />
+            </div>
+            <div className="max-h-80 overflow-y-auto p-1" role="listbox">
+              {groups.map((g) => (
+                <div key={g.title}>
+                  <div className="px-2.5 pt-2 pb-1 text-[11px] font-medium tracking-wide text-muted uppercase">{g.title}</div>
+                  {g.rows.map((s) => {
+                    const K = KIND_META[s.kind].icon;
+                    return (
+                      <button
+                        key={s.id}
+                        role="option"
+                        aria-selected={s.id === current?.id}
+                        onClick={() => {
+                          onSelect(s.id);
+                          setOpen(false);
+                          setQ("");
+                        }}
+                        className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left hover:bg-surface-2"
+                      >
+                        <K size={15} className="shrink-0 text-muted" />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm">{s.name}</span>
+                          <span className="block truncate text-[11px] text-muted">
+                            {KIND_META[s.kind].label} · {s.appId ?? s.domain}
+                          </span>
+                        </span>
+                        {s.id === current?.id && <Check size={14} className="shrink-0 text-accent" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              ))}
+              {!groups.length && <p className="px-3 py-6 text-center text-sm text-muted">No matches</p>}
+            </div>
+            <div className="flex items-center justify-between border-t border-line p-2">
+              <span className="px-1 text-[12px] tabular-nums text-muted">
+                {sites.length} of {limit}
+              </span>
+              <Button
+                size="sm"
+                variant="primary"
+                disabled={sites.length >= limit}
+                onClick={() => {
+                  setOpen(false);
+                  onAdd();
+                }}
+              >
+                <Plus size={14} /> Add site or app
+              </Button>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function Install({ site, onClose }: { site: Site | null; onClose: () => void }) {
   const origin = typeof window === "undefined" ? "" : window.location.origin;
   if (!site) return null;
+  const browser = site.kind === "website" || site.kind === "web_app";
   return (
-    <Modal open={!!site} onClose={onClose} title={`Install on ${site.domain}`} className="sm:max-w-2xl">
+    <Modal open={!!site} onClose={onClose} title={`Set up ${site.name}`} className="sm:max-w-2xl">
       <div className="space-y-5 p-5 text-sm">
         {site.secret && (
           <div className="rounded-xl border border-warn/30 bg-warn-soft/60 p-3">
@@ -618,13 +747,19 @@ function Install({ site, onClose }: { site: Site | null; onClose: () => void }) 
             <p className="mt-2 text-[12px] text-fg-2">Keep it on your server. It authorises the verify API for {site.domain}.</p>
           </div>
         )}
+        {browser ? (
+          <div>
+            <div className="mb-1 font-medium">1. Add the script to every page</div>
+            <p className="mb-2 text-[13px] text-muted">Under 5 KB. Collects timings, pointer positions, counts and where the visit came from — never keystrokes, form values or page text.</p>
+            <CopyField multiline value={`<script src="${origin}/aa.js" data-site="${site.siteKey}" defer></script>`} />
+          </div>
+        ) : (
+          <p className="rounded-xl border border-line bg-surface-2 p-3 text-[13px] text-fg-2">
+            {site.kind === "mobile_app" ? `${site.appId} · ` : ""}Agents that act through this {KIND_META[site.kind].noun} call <code className="font-mono text-[12px]">{site.domain}</code>. Verify each request there to get its trust tier, the agent behind it and a policy decision. Screens that run in a web view can also load the script for behavioural scoring and attribution.
+          </p>
+        )}
         <div>
-          <div className="mb-1 font-medium">1. Add the script to every page</div>
-          <p className="mb-2 text-[13px] text-muted">3.8 KB. Collects timings, pointer positions and counts only — never keystrokes, form values or page text.</p>
-          <CopyField multiline value={`<script src="${origin}/aa.js" data-site="${site.siteKey}" defer></script>`} />
-        </div>
-        <div>
-          <div className="mb-1 font-medium">2. Verify signed agents at your edge (recommended)</div>
+          <div className="mb-1 font-medium">{browser ? "2. Verify signed agents at your edge (recommended)" : "1. Verify requests from your backend"}</div>
           <p className="mb-2 text-[13px] text-muted">
             Forward each page request&apos;s method, URL and headers. You get a trust tier, a policy decision and a token (vt). Put the token on the script tag as{" "}
             <code className="font-mono text-[12px]">data-vt</code> so the browser session inherits the verified identity.
@@ -637,16 +772,23 @@ function Install({ site, onClose }: { site: Site | null; onClose: () => void }) 
   -d '{"method":"GET","url":"https://${site.domain}/","headers":{"signature":"…","signature-input":"…","signature-agent":"…","user-agent":"…"},"ip":"203.0.113.9"}'`}
           />
         </div>
-        <div>
-          <div className="mb-1 font-medium">3. Report tasks</div>
-          <CopyField multiline value={`window.aa?.task("checkout", "start");   // then "complete" or "fail"`} />
-        </div>
+        {browser && (
+          <div>
+            <div className="mb-1 font-medium">3. Report tasks</div>
+            <CopyField multiline value={`window.aa?.task("checkout", "start");   // then "complete" or "fail"`} />
+          </div>
+        )}
         <p className="text-[12px] text-muted">
-          Site key: <code className="font-mono">{site.siteKey}</code>. Want to see it work first? Open the{" "}
-          <a className="text-accent hover:underline" href={`/aa/demo/${site.siteKey}`} target="_blank" rel="noreferrer">
-            demo store
-          </a>{" "}
-          — it&apos;s already wired to this site.
+          Key: <code className="font-mono">{site.siteKey}</code>.
+          {browser && (
+            <>
+              {" "}Want to see it work first? Open the{" "}
+              <a className="text-accent hover:underline" href={`/aa/demo/${site.siteKey}`} target="_blank" rel="noreferrer">
+                demo store
+              </a>{" "}
+              — it&apos;s already wired to this {KIND_META[site.kind].noun}.
+            </>
+          )}
         </p>
       </div>
     </Modal>

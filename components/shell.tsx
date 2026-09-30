@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, ChevronsUpDown, LogOut, Menu, Moon, Settings, ShieldCheck, Sun, X } from "lucide-react";
+import { Activity, ChevronsUpDown, LogOut, Menu, Moon, Settings, ShieldCheck, Sun, UserCog, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
@@ -40,7 +40,8 @@ export function Shell({ children }: { children: ReactNode }) {
         <NavItem key={n.href} {...n} active={path === n.href} />
       ))}
 
-      <div className="mt-5">
+      <div className="mt-5 flex flex-col gap-1">
+        {account?.superAdmin && <NavItem href="/app/admin" label="Admin" icon={UserCog} active={path === "/app/admin"} />}
         <NavItem href="/app/settings" label="Settings" icon={Settings} active={path === "/app/settings"} />
       </div>
 

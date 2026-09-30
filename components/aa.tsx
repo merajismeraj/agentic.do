@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Copy } from "lucide-react";
+import { AppWindow, Check, Copy, Globe, Server, Smartphone } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
@@ -50,6 +50,60 @@ export function Legend({ counts }: { counts?: Partial<Record<ActorClass, number>
     </div>
   );
 }
+
+/* Property kinds ----------------------------------------------------- */
+
+export type PropertyKind = "website" | "web_app" | "mobile_app" | "api";
+export const KIND_ORDER: PropertyKind[] = ["website", "web_app", "mobile_app", "api"];
+export const KIND_META: Record<
+  PropertyKind,
+  { label: string; noun: string; icon: typeof Globe; blurb: string; domainLabel: string; domainPlaceholder: string; domainHint: string; namePlaceholder: string; app: boolean }
+> = {
+  website: {
+    label: "Website",
+    noun: "site",
+    icon: Globe,
+    blurb: "Pages people and agents browse",
+    domainLabel: "Domain",
+    domainPlaceholder: "shop.example.com",
+    domainHint: "Signatures are bound to a host, so the verify API only checks requests for this domain and its subdomains.",
+    namePlaceholder: "Northstar shop",
+    app: false,
+  },
+  web_app: {
+    label: "Web app",
+    noun: "app",
+    icon: AppWindow,
+    blurb: "A signed-in product in the browser",
+    domainLabel: "App domain",
+    domainPlaceholder: "app.example.com",
+    domainHint: "The host your web app is served from.",
+    namePlaceholder: "Northstar dashboard",
+    app: true,
+  },
+  mobile_app: {
+    label: "Mobile app",
+    noun: "app",
+    icon: Smartphone,
+    blurb: "iOS or Android, verified at its API",
+    domainLabel: "API host",
+    domainPlaceholder: "api.example.com",
+    domainHint: "The host your app's backend serves. Agents acting through the app sign requests to it.",
+    namePlaceholder: "Northstar for iOS",
+    app: true,
+  },
+  api: {
+    label: "API",
+    noun: "API",
+    icon: Server,
+    blurb: "Endpoints agents call directly",
+    domainLabel: "API host",
+    domainPlaceholder: "api.example.com",
+    domainHint: "Requests to this host (and its subdomains) are verified.",
+    namePlaceholder: "Northstar public API",
+    app: true,
+  },
+};
 
 /* Formatting --------------------------------------------------------- */
 

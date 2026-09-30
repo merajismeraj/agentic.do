@@ -11,6 +11,7 @@ export interface Account {
   email: string;
   name: string;
   emailVerified?: boolean;
+  superAdmin?: boolean;
 }
 
 export interface ServerInfo {

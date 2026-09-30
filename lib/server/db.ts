@@ -131,6 +131,10 @@ create table if not exists aa_sessions (
   primary key (site_id, id)
 );
 create index if not exists aa_sessions_recent on aa_sessions(site_id, last_at desc);
+-- Properties: a website, web app, mobile app or API. Mobile apps also carry their bundle / package id.
+alter table aa_sites add column if not exists kind text not null default 'website';
+alter table aa_sites add column if not exists app_id text;
+
 -- Attribution (where the session came from); first_touch = this browser's first channel/source/medium/campaign.
 alter table aa_sessions add column if not exists channel text;
 alter table aa_sessions add column if not exists source text;
