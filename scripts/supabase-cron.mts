@@ -28,13 +28,17 @@ const die = (msg: string) => {
 
 // Prefer the session-mode connection (Supabase's DIRECT_URL, port 5432) for setup; fall back to DATABASE_URL.
 const rawUrl =
-  process.env.DIRECT_URL?.trim() || process.env.DATABASE_URL?.trim();
+  process.env.DIRECT_URL?.trim() ||
+  process.env.POSTGRES_URL_NON_POOLING?.trim() ||
+  process.env.DATABASE_URL?.trim() ||
+  process.env.POSTGRES_URL?.trim();
 const dbUrl = rawUrl
   ? (() => {
       const u = new URL(rawUrl);
       for (const k of [
         "sslmode",
         "pgbouncer",
+        "supa",
         "connection_limit",
         "pool_timeout",
       ])

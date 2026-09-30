@@ -228,6 +228,15 @@ create index if not exists aa_batches_age on aa_batches(received_at);
 `;
 
 /**
+ * The Postgres URL: DATABASE_URL, else what the Supabase or Neon Vercel integrations
+ * inject — POSTGRES_URL, or a prefixed copy such as `agentic_POSTGRES_URL` (pooled).
+ */
+export function databaseUrl(env: Record<string, string | undefined> = process.env) {
+  const pick = (k: string | undefined) => (k ? env[k]?.trim() : undefined) || undefined;
+  return pick("DATABASE_URL") ?? pick("POSTGRES_URL") ?? pick(Object.keys(env).sort().find((k) => /^[A-Za-z0-9]+_POSTGRES_URL$/.test(k)));
+}
+
+/**
  * Accepts the URLs Supabase hands out (including Prisma's `?pgbouncer=true`): TLS is
  * configured in code, and ORM-only parameters mean nothing to node-postgres.
  */
@@ -239,7 +248,7 @@ export function pgUrl(raw: string) {
     throw new Error("DATABASE_URL isn't a valid URL. If the password has characters like @ # / ?, URL-encode them.");
   }
   const local = u.hostname === "localhost" || u.hostname === "127.0.0.1" || u.searchParams.get("sslmode") === "disable";
-  for (const k of ["sslmode", "pgbouncer", "connection_limit", "pool_timeout", "schema"]) u.searchParams.delete(k);
+  for (const k of ["sslmode", "pgbouncer", "connection_limit", "pool_timeout", "schema", "supa"]) u.searchParams.delete(k);
   return { connectionString: u.toString(), local };
 }
 
@@ -259,11 +268,11 @@ export function db(): Promise<Db> {
 }
 
 async function connect(): Promise<Db> {
-  const url = process.env.DATABASE_URL?.trim();
+  const url = databaseUrl();
   let base: Db;
 
   if (!url && process.env.VERCEL) {
-    throw new Error("DATABASE_URL is required on Vercel (the embedded database can't persist on serverless). Use your Supabase pooler connection string.");
+    throw new Error("DATABASE_URL is required on Vercel (the embedded database can't persist on serverless). Connect the Supabase integration or set DATABASE_URL to your pooler connection string.");
   }
 
   if (url) {

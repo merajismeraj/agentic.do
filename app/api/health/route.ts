@@ -1,4 +1,4 @@
-import { db } from "@/lib/server/db";
+import { databaseUrl, db } from "@/lib/server/db";
 import { emailConfigured } from "@/lib/server/mailer";
 import { sealingConfigured } from "@/lib/server/seal";
 
@@ -15,7 +15,7 @@ export async function GET() {
     database = { ok: false, error: e instanceof Error ? e.message.slice(0, 200) : "unreachable" };
   }
   const config = {
-    database: set("DATABASE_URL") ? "postgres" : "embedded",
+    database: databaseUrl() ? "postgres" : "embedded",
     sessionSecret: sealingConfigured(),
     cronSecret: set("CRON_SECRET"),
     appUrl: set("APP_URL"),
