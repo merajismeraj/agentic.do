@@ -42,7 +42,14 @@ async function overRate(siteId: string, agentId: string, perMin: number) {
   return (rows[0]?.n ?? 0) >= perMin;
 }
 
-export async function verifyForSite(site: Site, req: RequestLike & { ip?: string | null }): Promise<Verdict> {
+export interface VerifyOptions {
+  /** Path to record instead of the request's own (the SDK's requests record the page they came from). */
+  logPath?: string;
+  /** Record requests that carry no signature (default true). */
+  logUnsigned?: boolean;
+}
+
+export async function verifyForSite(site: Site, req: RequestLike & { ip?: string | null }, opts: VerifyOptions = {}): Promise<Verdict> {
   const verify = await verifyRequest(req, { resolveKey, checkNonce });
   const meta = (verify.status === "valid" ? verify.meta : undefined) as KeyMeta | undefined;
   const ua =
@@ -54,15 +61,17 @@ export async function verifyForSite(site: Site, req: RequestLike & { ip?: string
   const rate = agentId && meta?.ratePerMin ? await overRate(site.id, agentId, meta.ratePerMin) : false;
   const decision = decide({ tier, verify, overRate: rate });
   const declared = declaredAgent(ua);
-  let path = "/";
-  try {
-    const u = new URL(req.url);
-    path = (u.pathname + u.search).slice(0, 500);
-  } catch {
-    /* keep "/" */
-  }
+  let path = opts.logPath ?? "/";
+  if (!opts.logPath)
+    try {
+      const u = new URL(req.url);
+      path = (u.pathname + u.search).slice(0, 500);
+    } catch {
+      /* keep "/" */
+    }
 
-  await (await db()).query(
+  if (verify.status !== "absent" || opts.logUnsigned !== false)
+    await (await db()).query(
     `insert into aa_requests (id, site_id, method, path, tier, decision, verify_status, verify_reason, keyid, directory, agent_id, declared, ua, ip_hash)
      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
     [

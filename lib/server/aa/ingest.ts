@@ -2,12 +2,12 @@ import "server-only";
 import { attribute, CLICK_ID_PARAMS, touchOf, type SourceSignals } from "@/lib/aa/attribution";
 import { MAX_BATCH_EVENTS, type AaEvent, type CollectBatch } from "@/lib/aa/events";
 import { scoreSession } from "@/lib/aa/scoring";
-import { maxTier, tierRank, type Tier } from "@/lib/aa/verifier";
+import { assignTier, maxTier, tierRank, type RequestLike, type Tier } from "@/lib/aa/verifier";
 import { HttpError } from "../auth";
 import { db } from "../db";
 import { siteByKey } from "./sites";
 import { ipHash } from "./util";
-import { readVt } from "./verify";
+import { readVt, verifyForSite } from "./verify";
 
 const KINDS = new Set(["pv", "mv", "ck", "sc", "kd", "in", "vis", "lv", "task", "env", "src"]);
 
@@ -84,7 +84,12 @@ export function sanitizeEvents(input: unknown, now = Date.now()): AaEvent[] {
 const MAX_SESSION_BATCHES = 200;
 
 /** Store a batch, rescore the whole session, upsert the session row. */
-export async function collect(body: unknown, meta: { ip: string | null; ua: string | null }) {
+/**
+ * `request` is the SDK's own HTTP request to us. Agents that sign their traffic
+ * (Web Bot Auth) sign it too, so the script tag alone proves who they are: no
+ * server-side integration needed. A data-vt token from edge verification still counts.
+ */
+export async function collect(body: unknown, meta: { ip: string | null; ua: string | null; request?: RequestLike }) {
   const b = body as Partial<CollectBatch>;
   if (!b || typeof b.site !== "string" || typeof b.sid !== "string" || !/^[a-f0-9]{8,64}$/.test(b.sid) || !Number.isInteger(b.seq))
     throw new HttpError(400, "Malformed batch");
@@ -118,6 +123,14 @@ export async function collect(body: unknown, meta: { ip: string | null; ua: stri
   if (claims) {
     tier = maxTier(tier, claims.t);
     if (claims.a) agentId = claims.a;
+  }
+  if (meta.request) {
+    const page = [...events].reverse().find((e): e is Extract<AaEvent, { t: "pv" }> => e.t === "pv")?.path;
+    const v = await verifyForSite(site, { ...meta.request, ip: meta.ip }, { logPath: page ?? "/", logUnsigned: false });
+    // Without a signature this still catches automation that names itself in its user agent (T1).
+    const own = v.verify.status === "absent" ? assignTier({ verify: v.verify, userAgent: meta.ua, registryStatus: null }) : v.tier;
+    tier = maxTier(tier, own);
+    if (v.agent) agentId = v.agent.id;
   }
   // A verified identity outranks behaviour: a signed agent is an agent, whatever it looks like.
   const label = tierRank(tier) >= 2 ? "agent" : score.label;

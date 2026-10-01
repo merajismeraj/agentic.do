@@ -35,7 +35,12 @@ export async function POST(req: Request) {
     } catch {
       throw new HttpError(400, "Body must be JSON");
     }
-    const r = await collect(body, { ip, ua: req.headers.get("user-agent") });
+    // The public URL as the client addressed it: a signature binds @authority to that host.
+    const url = new URL(req.url);
+    const host = req.headers.get("x-forwarded-host") ?? req.headers.get("host");
+    if (host) url.host = host;
+    if (req.headers.get("x-forwarded-proto") === "https") url.protocol = "https:";
+    const r = await collect(body, { ip, ua: req.headers.get("user-agent"), request: { method: "POST", url: url.toString(), headers: req.headers } });
     return reply({ ok: true, duplicate: r.duplicate });
   } catch (e) {
     if (e instanceof HttpError) return reply({ error: e.message }, e.status);

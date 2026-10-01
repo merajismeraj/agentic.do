@@ -32,24 +32,32 @@ The LLR curves are hand-set in v0 and tested on synthetic sessions and live Play
 
 ## Integrate a site
 
-1. **Agent analytics → Add site.** You get a public site key and a server secret, shown once.
-2. **Script on every page:**
-   ```html
-   <script src="https://YOUR_APP/aa.js" data-site="aa_pk_…" defer></script>
-   ```
-   Under 5 KB. It records timings, pointer positions and counts, never keystroke values, form contents or page text, plus where each session came from (see Attribution).
-3. **Verify at your edge** (recommended). Forward each page request and embed the returned token as `data-vt` on the script tag, so the browser session inherits the verified identity:
-   ```ts
-   // Cloudflare Worker / Next.js proxy / any server
-   const r = await fetch("https://YOUR_APP/api/aa/verify", {
-     method: "POST",
-     headers: { authorization: `Bearer ${AA_SITE_SECRET}`, "content-type": "application/json" },
-     body: JSON.stringify({ method: req.method, url: req.url, headers: Object.fromEntries(req.headers), ip }),
-   });
-   const { tier, decision, agent, vt } = await r.json(); // decision: allow | rate_limit | challenge
-   ```
-   A site secret only verifies URLs on its own domain, because signatures are bound to `@authority`.
-4. **Report tasks:** `window.aa.task("checkout", "start" | "complete" | "fail")`.
+**One tag in the `<head>` of every page. That's the whole setup.**
+
+```html
+<script defer src="https://YOUR_APP/aa.js" data-site="aa_pk_…"></script>
+```
+
+Agent analytics → **Add a site or app** gives you the tag. It works pasted into a layout, a CMS header, `theme.liquid`, or a Google Tag Manager Custom HTML tag. Under 5 KB; it records timings, pointer positions and counts, never keystroke values, form contents or page text, plus where each session came from (see Attribution). The install screen shows "Receiving data" as soon as the first visit arrives.
+
+What the tag alone gives you:
+
+- **Human vs agent** for every session (behaviour), and **attribution** (channel, source, campaign).
+- **Verified identity:** agents that sign their traffic (Web Bot Auth) sign every request their browser makes, including the SDK's uploads to us. `/api/aa/collect` verifies those signatures, so the session gets its trust tier (T2/T3) and agent with no server-side work. Automation that names itself in its user agent is T1. Replayed or forged signatures earn nothing.
+
+Optional:
+
+- **Goals:** `window.aa.task("checkout", "start" | "complete" | "fail")` for conversion rates by channel and by human vs agent.
+- **Act at your edge** (allow / rate-limit / challenge *before* the page is served). Forward each request to the verify API with the site's server secret; embed the returned token as `data-vt` on the tag to tie the browser session to that verdict:
+  ```ts
+  const r = await fetch("https://YOUR_APP/api/aa/verify", {
+    method: "POST",
+    headers: { authorization: `Bearer ${AA_SITE_SECRET}`, "content-type": "application/json" },
+    body: JSON.stringify({ method: req.method, url: req.url, headers: Object.fromEntries(req.headers), ip }),
+  });
+  const { tier, decision, agent, vt } = await r.json(); // decision: allow | rate_limit | challenge
+  ```
+  A site secret only verifies URLs on its own domain, because signatures are bound to `@authority`. Mobile apps and APIs (no page to put a tag on) use this path.
 
 The built-in demo store at `/aa/demo/<site key>` does all of this server-side. Use it to see the loop work.
 

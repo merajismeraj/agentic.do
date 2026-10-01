@@ -1,6 +1,7 @@
 import { errorResponse, HttpError, requireUser } from "@/lib/server/auth";
 import { deleteSite, getSite, renameSite, rotateSecret } from "@/lib/server/aa/sites";
 import { siteOverview } from "@/lib/server/aa/stats";
+import { db } from "@/lib/server/db";
 import { requireWorkspace } from "@/lib/server/workspace";
 
 export const runtime = "nodejs";
@@ -15,6 +16,18 @@ export async function GET(req: Request, { params }: Ctx) {
     const ws = await requireWorkspace(user.id);
     const site = await getSite(ws.id, (await params).id);
     if (!site) throw new HttpError(404, "Site not found");
+    // ?check=1: is the script installed? (Polled by the install screen.)
+    if (new URL(req.url).searchParams.get("check")) {
+      const d = await db();
+      const s = (
+        await d.query<{ last: string | null; n: number }>(
+          "select max(last_at) as last, count(*) filter (where last_at > now() - interval '1 day')::int as n from aa_sessions where site_id = $1",
+          [site.id],
+        )
+      ).rows[0];
+      const r = (await d.query<{ last: string | null }>("select max(at) as last from aa_requests where site_id = $1", [site.id])).rows[0];
+      return Response.json({ lastEventAt: s?.last ?? null, sessions24h: s?.n ?? 0, lastVerifiedRequestAt: r?.last ?? null });
+    }
     const days = Math.min(90, Math.max(1, Number(new URL(req.url).searchParams.get("days")) || 7));
     return Response.json({ site, overview: await siteOverview(site.id, days) });
   } catch (e) {

@@ -312,6 +312,34 @@ assert.equal(shopper.outcomes.tasks.completed, 1);
 assert.equal(mine.agents.find((a: Any) => a.id === fast.id).outcomes.byDecision.find((d: Any) => d.decision === "rate_limit").n, 1);
 ok("builder view: requests, sites reached, acceptance rate, failure reasons and task success — sites stay anonymous");
 
+/* ------------------- Script tag only: no edge integration ------------------- */
+
+// The agent's browser signs every request it makes, including the SDK's uploads to us, so a site with
+// nothing but the script tag still learns who the agent is.
+const collectUrl = "http://app.test/api/aa/collect";
+const tagPost = (sid: string, headers: Record<string, string>, events: Any[]) =>
+  collect.POST(new Request(collectUrl, { method: "POST", headers: { "content-type": "text/plain", ...headers }, body: JSON.stringify({ site: site.siteKey, sid, seq: 0, events }) }));
+const tagSig = await signed(collectUrl);
+const tagEv = agentSession(12);
+const tagPage = [...tagEv].reverse().find((e: Any) => e.t === "pv").path; // the page the upload came from
+const reqsBefore = (await dbq("select count(*)::int as n from aa_requests where site_id = $1", [site.id])).rows[0].n;
+assert.equal((await tagPost("dddd000000000004", { "user-agent": "Mozilla/5.0 (agent browser)", ...tagSig }, tagEv)).status, 200);
+assert.equal((await tagPost("eeee000000000005", { "user-agent": "Mozilla/5.0 (agent browser)", ...tagSig }, agentSession(13))).status, 200, "a replayed signature never fails the upload");
+assert.equal((await tagPost("ffff000000000006", { "user-agent": "python-requests/2.32" }, humanSession(14))).status, 200);
+assert.equal((await tagPost("abab000000000007", { "user-agent": "Mozilla/5.0 test" }, humanSession(15))).status, 200);
+const viaTag = ((await (await siteOne.GET(alex.req(`/api/aa/sites/${site.id}?days=7`), { params: Promise.resolve({ id: site.id }) })).json()) as Any).overview;
+const sess = (id: string) => viaTag.sessions.find((x: Any) => x.id === id);
+assert.deepEqual([sess("dddd000000000004").tier, sess("dddd000000000004").cls, sess("dddd000000000004").agentName], ["T3", "verified_agent", "Northstar Shopper"]);
+assert.ok(!["T2", "T3", "T4"].includes(sess("eeee000000000005").tier) && sess("eeee000000000005").cls !== "verified_agent", "replayed signature earns nothing");
+assert.equal(sess("ffff000000000006").tier, "T1", "automation that names itself in its user agent is Declared");
+assert.equal(sess("abab000000000007").tier, "T0");
+const logged = (await dbq("select path, decision, verify_status, verify_reason from aa_requests where site_id = $1 order by at desc limit $2", [site.id, 10])).rows;
+const reqsAfter = (await dbq("select count(*)::int as n from aa_requests where site_id = $1", [site.id])).rows[0].n;
+assert.equal(reqsAfter - reqsBefore, 2, "signed uploads are logged; unsigned ones are not");
+assert.ok(logged.some((r: Any) => r.path === tagPage && r.verify_status === "valid"), "logged against the page, not the upload endpoint");
+assert.ok(logged.some((r: Any) => r.verify_reason === "replay"));
+ok("script tag alone: signed agents verified (T3 + agent) from the SDK's own requests, replays rejected, declared automation is T1");
+
 /* ------------------------ Rotation & revocation ------------------------ */
 
 const next = await sig.generateAgentKey();

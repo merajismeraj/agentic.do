@@ -164,14 +164,14 @@ export default function Landing() {
             Integrate in minutes
           </div>
           <h2 className="mt-2 text-[32px] leading-tight font-semibold tracking-tight sm:text-[40px]">
-            One tag in the browser. One call at your edge.
+            One tag in your &lt;head&gt;. That&apos;s the setup.
           </h2>
           <ul className="mt-6 space-y-3 text-[15px]">
             {[
-              "Add a site to get a public key and a server secret",
-              "Drop the 5 KB script on every page",
-              "Verify signatures at your edge and pass the token to the page",
-              'Report tasks with window.aa.task("checkout", "complete")',
+              "Add your site and copy its tag",
+              "Paste it in the <head> of every page, or add it through Google Tag Manager",
+              "Every visit is classified human or agent, attributed to a channel, and signed agents are verified automatically",
+              'Optional: report goals with window.aa.task("checkout", "complete")',
             ].map((t, i) => (
               <li key={t} className="flex gap-3">
                 <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-accent-soft text-xs font-semibold text-accent-ink">
@@ -184,20 +184,19 @@ export default function Landing() {
         </div>
         <div className="overflow-hidden rounded-2xl border border-line bg-surface shadow-pop">
           <div className="border-b border-line px-4 py-2.5 font-mono text-[11px] text-muted">
-            index.html · edge.ts
+            index.html
           </div>
           <pre className="overflow-x-auto p-5 font-mono text-[12.5px] leading-relaxed text-fg-2">
-            {`<script src="https://agentic.do/aa.js"
-        data-site="aa_pk_…" defer></script>
+            {`<head>
+  …
+  <script defer src="https://agentic.do/aa.js"
+          data-site="aa_pk_…"></script>
+</head>
 
-// at your edge
-const r = await fetch("https://agentic.do/api/aa/verify", {
-  method: "POST",
-  headers: { authorization: \`Bearer \${AA_SITE_SECRET}\` },
-  body: JSON.stringify({ method, url, headers, ip }),
-});
-const { tier, decision, agent, vt } = await r.json();
-// decision: allow | rate_limit | challenge`}
+<!-- optional: track a goal -->
+<script>
+  window.aa?.task("checkout", "complete");
+</script>`}
           </pre>
         </div>
       </section>

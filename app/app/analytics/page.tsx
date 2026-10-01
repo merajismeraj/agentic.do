@@ -183,7 +183,7 @@ export default function AnalyticsPage() {
         <Empty
           icon={<Globe size={20} />}
           title="Track your first site or app"
-          body={`Add a website, web app, mobile app or API (up to ${limit}). Websites and web apps get one script tag; every kind can verify signed agents from your server. Or try it on the built-in demo store.`}
+          body={`Add a website or app (up to ${limit}), then paste one tag in the <head> of every page. That's the whole setup.`}
           action={
             <Button variant="primary" onClick={() => setAdding(true)}>
               <Plus size={15} /> Add a site or app
@@ -226,7 +226,7 @@ export default function AnalyticsPage() {
               title="Waiting for traffic"
               body={
                 site.kind === "website" || site.kind === "web_app"
-                  ? `Nothing from ${site.domain} yet. Install the snippet, or open the demo store and browse it yourself — then run an agent against it.`
+                  ? `Nothing from ${site.domain} yet. Paste the tag in the <head> of every page, or open the demo store and browse it yourself, then run an agent against it.`
                   : `Nothing from ${site.appId ?? site.domain} yet. Call the verify API from ${site.domain}'s backend for each request, and signed agents show up here.`
               }
               action={
@@ -404,7 +404,7 @@ export default function AnalyticsPage() {
               <div className="grid gap-4 lg:grid-cols-3">
                 <Card className="min-w-0 p-5">
                   <h2 className="font-semibold">Verification</h2>
-                  <p className="mb-4 text-[12px] text-muted">Requests checked by the verify API</p>
+                  <p className="mb-4 text-[12px] text-muted">Signed requests, from the script tag or your edge</p>
                   <div className="mb-4 grid grid-cols-3 gap-2 text-center">
                     {[
                       ["Checked", data.requests.total],
@@ -458,7 +458,7 @@ export default function AnalyticsPage() {
                       </table>
                     </div>
                   ) : (
-                    <p className="text-sm text-muted">Call POST /api/aa/verify from your edge to verify signed agents. See Install.</p>
+                    <p className="text-sm text-muted">No signed requests yet. Agents that sign their traffic are verified automatically through the script tag.</p>
                   )}
                 </Card>
               </div>
@@ -734,67 +734,183 @@ function PropertySwitcher({ sites, current, limit, onSelect, onAdd }: { sites: S
 }
 
 function Install({ site, onClose }: { site: Site | null; onClose: () => void }) {
+  const { toast } = useStore();
   const origin = typeof window === "undefined" ? "" : window.location.origin;
+  const [status, setStatus] = useState<{ lastEventAt: string | null; sessions24h: number; lastVerifiedRequestAt: string | null } | null>(null);
+  const [secret, setSecret] = useState<string | null>(null);
+  const siteId = site?.id;
+
+  // Poll until the first visit arrives, so people know the tag works.
+  useEffect(() => {
+    setStatus(null);
+    setSecret(site?.secret ?? null);
+    if (!siteId) return;
+    let stop = false;
+    const check = async () => {
+      try {
+        const s = await api<{ lastEventAt: string | null; sessions24h: number; lastVerifiedRequestAt: string | null }>(`/api/aa/sites/${siteId}?check=1`);
+        if (!stop) setStatus(s);
+      } catch {
+        /* keep polling */
+      }
+    };
+    check();
+    const t = setInterval(check, 4000);
+    return () => {
+      stop = true;
+      clearInterval(t);
+    };
+  }, [siteId, site?.secret]);
+
   if (!site) return null;
+  const tag = `<script defer src="${origin}/aa.js"
+        data-site="${site.siteKey}"></script>`;
   const browser = site.kind === "website" || site.kind === "web_app";
+  const live = !!status?.lastEventAt || (!browser && !!status?.lastVerifiedRequestAt);
+
+  const rotate = async () => {
+    if (!confirm("Create a new server secret? The current one stops working immediately.")) return;
+    try {
+      setSecret((await api<{ secret: string }>(`/api/aa/sites/${site.id}`, { method: "POST", body: { action: "rotate_secret" } })).secret);
+    } catch (e) {
+      toast((e as Error).message);
+    }
+  };
+
+  const secretBlock = secret ? (
+    <div className="rounded-xl border border-warn/30 bg-warn-soft/60 p-3">
+      <div className="mb-2 text-[13px] font-medium">Server secret: copy it now, it&apos;s shown once</div>
+      <CopyField value={secret} />
+    </div>
+  ) : (
+    <p className="text-[12px] text-muted">
+      Lost the server secret?{" "}
+      <button onClick={rotate} className="text-accent hover:underline">
+        Create a new one
+      </button>
+      .
+    </p>
+  );
+
+  const verifyCurl = `curl -X POST ${origin}/api/aa/verify \\
+  -H "Authorization: Bearer $AA_SITE_SECRET" \\
+  -H "content-type: application/json" \\
+  -d '{"method":"GET","url":"https://${site.domain}/","headers":{"signature":"…","signature-input":"…","signature-agent":"…","user-agent":"…"},"ip":"203.0.113.9"}'`;
+
   return (
     <Modal open={!!site} onClose={onClose} title={`Set up ${site.name}`} className="sm:max-w-2xl">
       <div className="space-y-5 p-5 text-sm">
-        {site.secret && (
-          <div className="rounded-xl border border-warn/30 bg-warn-soft/60 p-3">
-            <div className="mb-2 font-medium">Server secret — shown once</div>
-            <CopyField value={site.secret} />
-            <p className="mt-2 text-[12px] text-fg-2">Keep it on your server. It authorises the verify API for {site.domain}.</p>
-          </div>
-        )}
         {browser ? (
-          <div>
-            <div className="mb-1 font-medium">1. Add the script to every page</div>
-            <p className="mb-2 text-[13px] text-muted">Under 5 KB. Collects timings, pointer positions, counts and where the visit came from — never keystrokes, form values or page text.</p>
-            <CopyField multiline value={`<script src="${origin}/aa.js" data-site="${site.siteKey}" defer></script>`} />
-          </div>
+          <>
+            <div>
+              <div className="mb-1 font-medium">Paste this in the &lt;head&gt; of every page</div>
+              <p className="mb-2 text-[13px] text-muted">
+                That&apos;s the whole setup. It classifies every visit as human or agent, attributes it to a channel, and verifies agents that sign their requests. Under 5 KB; never reads
+                keystrokes, form values or page text.
+              </p>
+              <CopyField multiline value={tag} />
+            </div>
+
+            <div
+              className={cn(
+                "flex items-center gap-2.5 rounded-xl border px-3 py-2.5 text-[13px]",
+                live ? "border-ok/30 bg-ok/10 text-fg" : "border-line bg-surface-2 text-fg-2",
+              )}
+              role="status"
+            >
+              {live ? <Check size={16} className="shrink-0 text-ok" /> : <span className="size-2 shrink-0 animate-pulse rounded-full bg-accent" />}
+              {live ? (
+                <span>
+                  Receiving data. Last visit {ago(new Date(status!.lastEventAt!).getTime())}
+                  {status!.sessions24h ? ` · ${num(status!.sessions24h)} in the last 24 hours` : ""}.
+                </span>
+              ) : (
+                <span>
+                  Waiting for the first visit… Open {site.domain} in a browser after adding the tag
+                  {site.kind === "website" && (
+                    <>
+                      , or try the{" "}
+                      <a className="text-accent hover:underline" href={`/aa/demo/${site.siteKey}`} target="_blank" rel="noreferrer">
+                        demo store
+                      </a>
+                    </>
+                  )}
+                  .
+                </span>
+              )}
+            </div>
+
+            <details className="group rounded-xl border border-line">
+              <summary className="cursor-pointer list-none px-3 py-2.5 text-[13px] font-medium text-fg-2 select-none hover:text-fg">
+                <span className="inline-block transition-transform group-open:rotate-90">›</span> Where does it go? Next.js, WordPress, Shopify, Google Tag Manager
+              </summary>
+              <ul className="space-y-1.5 border-t border-line px-3 py-3 text-[13px] text-fg-2">
+                <li>
+                  <b className="font-medium text-fg">Next.js:</b> add it inside <code className="font-mono text-[12px]">&lt;head&gt;</code> in <code className="font-mono text-[12px]">app/layout.tsx</code>.
+                </li>
+                <li>
+                  <b className="font-medium text-fg">WordPress:</b> a header-scripts plugin, or your theme&apos;s <code className="font-mono text-[12px]">header.php</code> before{" "}
+                  <code className="font-mono text-[12px]">&lt;/head&gt;</code>.
+                </li>
+                <li>
+                  <b className="font-medium text-fg">Shopify:</b> Online Store → Themes → Edit code → <code className="font-mono text-[12px]">theme.liquid</code>, before{" "}
+                  <code className="font-mono text-[12px]">&lt;/head&gt;</code>.
+                </li>
+                <li>
+                  <b className="font-medium text-fg">Google Tag Manager:</b> a Custom HTML tag with the snippet, triggered on All Pages.
+                </li>
+              </ul>
+            </details>
+
+            <details className="group rounded-xl border border-line">
+              <summary className="cursor-pointer list-none px-3 py-2.5 text-[13px] font-medium text-fg-2 select-none hover:text-fg">
+                <span className="inline-block transition-transform group-open:rotate-90">›</span> Optional: track goals, and act on agents at your edge
+              </summary>
+              <div className="space-y-4 border-t border-line px-3 py-3">
+                <div>
+                  <div className="mb-1 text-[13px] font-medium">Track goals</div>
+                  <p className="mb-2 text-[12px] text-muted">See who completes checkout or sign-up, by channel and by human vs agent.</p>
+                  <CopyField multiline value={`window.aa?.task("checkout", "start");   // then "complete" or "fail"`} />
+                </div>
+                <div>
+                  <div className="mb-1 text-[13px] font-medium">Allow, rate-limit or challenge agents before the page loads</div>
+                  <p className="mb-2 text-[12px] text-muted">
+                    Only if you want to act on agents in your own server or CDN. Forward each request&apos;s method, URL and headers; you get a trust tier and a decision.
+                  </p>
+                  <CopyField multiline value={verifyCurl} />
+                </div>
+                {secretBlock}
+              </div>
+            </details>
+          </>
         ) : (
-          <p className="rounded-xl border border-line bg-surface-2 p-3 text-[13px] text-fg-2">
-            {site.kind === "mobile_app" ? `${site.appId} · ` : ""}Agents that act through this {KIND_META[site.kind].noun} call <code className="font-mono text-[12px]">{site.domain}</code>. Verify each request there to get its trust tier, the agent behind it and a policy decision. Screens that run in a web view can also load the script for behavioural scoring and attribution.
-          </p>
-        )}
-        <div>
-          <div className="mb-1 font-medium">{browser ? "2. Verify signed agents at your edge (recommended)" : "1. Verify requests from your backend"}</div>
-          <p className="mb-2 text-[13px] text-muted">
-            Forward each page request&apos;s method, URL and headers. You get a trust tier, a policy decision and a token (vt). Put the token on the script tag as{" "}
-            <code className="font-mono text-[12px]">data-vt</code> so the browser session inherits the verified identity.
-          </p>
-          <CopyField
-            multiline
-            value={`curl -X POST ${origin}/api/aa/verify \\
-  -H "Authorization: Bearer $AA_SITE_SECRET" \\
-  -H "content-type: application/json" \\
-  -d '{"method":"GET","url":"https://${site.domain}/","headers":{"signature":"…","signature-input":"…","signature-agent":"…","user-agent":"…"},"ip":"203.0.113.9"}'`}
-          />
-        </div>
-        {browser && (
-          <div>
-            <div className="mb-1 font-medium">3. Report tasks</div>
-            <CopyField multiline value={`window.aa?.task("checkout", "start");   // then "complete" or "fail"`} />
-          </div>
+          <>
+            <p className="rounded-xl border border-line bg-surface-2 p-3 text-[13px] text-fg-2">
+              {site.kind === "mobile_app" ? `${site.appId} · ` : ""}Agents that act through this {KIND_META[site.kind].noun} call{" "}
+              <code className="font-mono text-[12px]">{site.domain}</code>. Verify each request there to get its trust tier, the agent behind it and a decision (allow,
+              rate-limit or challenge). Screens that run in a web view can also load the script tag for human-vs-agent scoring and attribution.
+            </p>
+            <div>
+              <div className="mb-1 font-medium">Verify requests from your backend</div>
+              <CopyField multiline value={verifyCurl} />
+            </div>
+            {secretBlock}
+            <div
+              className={cn("flex items-center gap-2.5 rounded-xl border px-3 py-2.5 text-[13px]", live ? "border-ok/30 bg-ok/10" : "border-line bg-surface-2 text-fg-2")}
+              role="status"
+            >
+              {live ? <Check size={16} className="shrink-0 text-ok" /> : <span className="size-2 shrink-0 animate-pulse rounded-full bg-accent" />}
+              {live ? "Receiving data." : "Waiting for the first verified request…"}
+            </div>
+          </>
         )}
         <p className="text-[12px] text-muted">
-          Key: <code className="font-mono">{site.siteKey}</code>.
-          {browser && (
-            <>
-              {" "}Want to see it work first? Open the{" "}
-              <a className="text-accent hover:underline" href={`/aa/demo/${site.siteKey}`} target="_blank" rel="noreferrer">
-                demo store
-              </a>{" "}
-              — it&apos;s already wired to this {KIND_META[site.kind].noun}.
-            </>
-          )}
+          Key: <code className="font-mono">{site.siteKey}</code>
         </p>
       </div>
     </Modal>
   );
 }
-
 function SessionDetail({ session, onClose }: { session: SessionRow | null; onClose: () => void }) {
   if (!session) return null;
   const s = session;
